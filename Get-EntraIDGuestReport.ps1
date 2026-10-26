@@ -412,6 +412,7 @@ function Get-IdentityProvider {
     if ($issuers -contains 'MicrosoftAccount') { return @{ Key = 'msa';    Label = 'Microsoft Account' } }
     if ($issuers -contains 'mail')             { return @{ Key = 'otp';    Label = 'Email OTP' } }
     if ($issuers -contains 'google.com')       { return @{ Key = 'google'; Label = 'Google' } }
+    if ($issuers -contains 'facebook.com')    { return @{ Key = 'facebook'; Label = 'Facebook' } }
     if ($issuers.Count -gt 0)                  { return @{ Key = 'other';  Label = $issuers[0] } }
     if ($Invitation -eq 'pending')             { return @{ Key = 'unredeemed'; Label = 'Not Redeemed' } }
     return @{ Key = 'unknown'; Label = 'Unknown' }
@@ -516,7 +517,12 @@ function Get-CleanupRecommendation {
     # Privileged external accounts always deserve a second look, even when active
     if ($Guest.Roles.Count -gt 0) {
         $roleNames = (@($Guest.Roles | ForEach-Object { $_.Role }) | Sort-Object -Unique) -join ', '
-        $reasons.Add((New-Reason 'review' "Holds $($Guest.Roles.Count) directory role assignment(s): $roleNames. Confirm this external account still needs privileged access"))
+        $activeCount = @($Guest.Roles | Where-Object { $_.Type -eq 'Active' }).Count
+        $eligibleCount = @($Guest.Roles | Where-Object { $_.Type -eq 'Eligible' }).Count
+        $held = @()
+        if ($activeCount -gt 0)   { $held += "$activeCount active directory role assignment(s)" }
+        if ($eligibleCount -gt 0) { $held += "$eligibleCount eligible (PIM) role assignment(s)" }
+        $reasons.Add((New-Reason 'review' "Holds $($held -join ' and '): $roleNames. Confirm this external account still needs privileged access"))
         if ($rec -eq 'keep') { $rec = 'review' }
     }
 
@@ -693,6 +699,26 @@ catch {
     Write-Warning "Could not read directory role assignments ($($_.Exception.Message)). Directory roles will not be reported."
 }
 
+# PIM eligible role assignments: standing assignments above only cover active roles, so a guest that is
+# merely eligible for e.g. Global Administrator would otherwise look clean. Tenants without PIM, or callers
+# without access, can't return them; that is reported in the output instead of failing the run.
+$roleEligibilityByPrincipal = @{}
+$script:eligibilityAvailable = $true
+try {
+    Write-Host "Pre-fetching eligible (PIM) role assignments (bulk)..." -ForegroundColor Green
+    foreach ($schedule in (Get-GraphCollection 'v1.0/roleManagement/directory/roleEligibilitySchedules')) {
+        if (-not $roleEligibilityByPrincipal.ContainsKey($schedule.principalId)) {
+            $roleEligibilityByPrincipal[$schedule.principalId] = [System.Collections.Generic.List[object]]::new()
+        }
+        $roleEligibilityByPrincipal[$schedule.principalId].Add($schedule)
+    }
+    Write-Host "  Cached eligible role assignments for $($roleEligibilityByPrincipal.Count) principals" -ForegroundColor Cyan
+}
+catch {
+    $script:eligibilityAvailable = $false
+    Write-Warning "Could not read eligible (PIM) role assignments ($($_.Exception.Message)). Only active directory roles will be reported."
+}
+
 # Per-guest access details through $batch: direct group memberships (incl. Teams), app role
 # assignments and sponsors - three requests per guest, twenty requests per Graph call.
 $accessResults = @{}
@@ -835,24 +861,28 @@ foreach ($u in $rawUsers) {
         }
     }
 
-    # Directory roles: assigned to the guest directly, or to a role-assignable group the guest is in
-    foreach ($assignment in @($roleAssignmentsByPrincipal[[string]$u.id])) {
-        if (-not $assignment) { continue }
-        $roles.Add([PSCustomObject]@{
-            Role  = if ($roleDefinitionsById.ContainsKey($assignment.roleDefinitionId)) { $roleDefinitionsById[$assignment.roleDefinitionId] } else { $assignment.roleDefinitionId }
-            Via   = 'Direct'
-            Scope = Get-RoleScopeLabel $assignment.directoryScopeId
-        })
-    }
+    # Directory roles: active (incl. activated PIM) and PIM eligible, held by the guest directly
+    # or through a role-assignable group the guest is a direct member of
+    $roleHolders = @(@{ Id = [string]$u.id; Via = 'Direct' })
     foreach ($group in @($groups) + @($teams)) {
-        if (-not $group -or -not $group.RoleAssignable) { continue }
-        foreach ($assignment in @($roleAssignmentsByPrincipal[$group.Id])) {
-            if (-not $assignment) { continue }
-            $roles.Add([PSCustomObject]@{
-                Role  = if ($roleDefinitionsById.ContainsKey($assignment.roleDefinitionId)) { $roleDefinitionsById[$assignment.roleDefinitionId] } else { $assignment.roleDefinitionId }
-                Via   = "Group: $($group.Name)"
-                Scope = Get-RoleScopeLabel $assignment.directoryScopeId
-            })
+        if ($group -and $group.RoleAssignable) { $roleHolders += @{ Id = $group.Id; Via = "Group: $($group.Name)" } }
+    }
+    $roleSources = @(
+        @{ Type = 'Active';   Map = $roleAssignmentsByPrincipal }
+        @{ Type = 'Eligible'; Map = $roleEligibilityByPrincipal }
+    )
+    foreach ($source in $roleSources) {
+        foreach ($holder in $roleHolders) {
+            foreach ($assignment in @($source.Map[$holder.Id])) {
+                if (-not $assignment) { continue }
+                $roles.Add([PSCustomObject]@{
+                    Role  = if ($roleDefinitionsById.ContainsKey($assignment.roleDefinitionId)) { $roleDefinitionsById[$assignment.roleDefinitionId] } else { $assignment.roleDefinitionId }
+                    Type  = $source.Type
+                    Via   = $holder.Via
+                    Scope = Get-RoleScopeLabel $assignment.directoryScopeId
+                    Ends  = if ($source.Type -eq 'Eligible') { ConvertTo-UtcDateTime $assignment.scheduleInfo.expiration.endDateTime } else { $null }
+                })
+            }
         }
     }
 
@@ -1408,6 +1438,9 @@ $signInBanner = if (-not $script:signInDataAvailable) {
 $accessBanner = if ($SkipAccessDetails) {
     "<div class='info-banner page-banner'><strong>Access details skipped.</strong> The report was generated with -SkipAccessDetails: group, Teams, application and sponsor details were not collected. Only directly assigned directory roles are shown.</div>"
 } else { '' }
+$eligibilityBanner = if (-not $script:eligibilityAvailable) {
+    "<div class='info-banner page-banner'><strong>Eligible (PIM) roles not shown.</strong> Eligible role assignments could not be read (Privileged Identity Management may not be available in this tenant, or the account lacks access). Guests that are only <em>eligible</em> for a directory role are not flagged in this report.</div>"
+} else { '' }
 $unknownActivityTag = if (-not $script:signInDataAvailable) {
     "<span class='filter-tag c-gray' data-group='activity' data-value='unknown' onclick='toggleTag(this)'>Unknown <span class='cnt'></span></span>"
 } else { '' }
@@ -1432,6 +1465,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
 
     $signInBanner
     $accessBanner
+    $eligibilityBanner
 
     <div class="summary">
         <div class="summary-card" data-clear="1" title="Clear all filters">
@@ -1474,10 +1508,10 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <div class="number">$disabledCount</div>
             <div class="subtitle">Guests with sign-in disabled</div>
         </div>
-        <div class="summary-card" data-fg="access" data-fv="roles" title="External accounts holding Entra ID directory roles. Click to filter.">
+        <div class="summary-card" data-fg="access" data-fv="roles" title="External accounts holding or eligible for Entra ID directory roles. Click to filter.">
             <h3>Directory Roles</h3>
             <div class="number">$privilegedCount</div>
-            <div class="subtitle">Guests with privileged access</div>
+            <div class="subtitle">Guests with active or eligible roles</div>
         </div>
         <div class="summary-card" data-fg="sponsor" data-fv="nosponsor" title="Nobody in the organization is recorded as responsible. Click to filter.">
             <h3>No Sponsor</h3>
@@ -1519,6 +1553,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <span class="filter-tag c-blue"  data-group="identity" data-value="msa"        onclick="toggleTag(this)">Microsoft Account <span class="cnt"></span></span>
             <span class="filter-tag c-amber"  data-group="identity" data-value="otp"        onclick="toggleTag(this)">Email OTP <span class="cnt"></span></span>
             <span class="filter-tag c-blue"  data-group="identity" data-value="google"     onclick="toggleTag(this)">Google <span class="cnt"></span></span>
+            <span class="filter-tag c-blue"  data-group="identity" data-value="facebook"   onclick="toggleTag(this)">Facebook <span class="cnt"></span></span>
             <span class="filter-tag c-purple"  data-group="identity" data-value="other"      onclick="toggleTag(this)">Other <span class="cnt"></span></span>
             <span class="filter-tag c-gray" data-group="identity" data-value="unredeemed" onclick="toggleTag(this)">Not Redeemed <span class="cnt"></span></span>
             <span class="filter-tag c-green"  data-group="identity" data-value="onprem"     onclick="toggleTag(this)">On-Prem Synced <span class="cnt"></span></span>
@@ -1619,7 +1654,7 @@ $recActionOnPrem = @{
 }
 $reasonBadge = @{ remove = 'red'; review = 'amber'; keep = 'green'; info = 'gray' }
 # Identity badge colors: green = organizationally managed, blue = consumer identity, amber = weakest assurance (email OTP), purple = custom federation, gray = no external identity
-$identityBadgeColor = @{ entra = 'green'; onprem = 'green'; msa = 'blue'; google = 'blue'; otp = 'amber'; other = 'purple'; unredeemed = 'gray'; unknown = 'gray' }
+$identityBadgeColor = @{ entra = 'green'; onprem = 'green'; msa = 'blue'; google = 'blue'; facebook = 'blue'; otp = 'amber'; other = 'purple'; unredeemed = 'gray'; unknown = 'gray' }
 
 foreach ($g in $sortedReport) {
     # Object ID from Graph - escaped for consistency with every other API-sourced field.
@@ -1666,12 +1701,13 @@ foreach ($g in $sortedReport) {
 
     # Access badges (each opens its own modal)
     $accessBadges = [System.Collections.Generic.List[string]]::new()
+    $eligibleRoleCount = @($g.Roles | Where-Object { $_.Type -eq 'Eligible' }).Count
     if ($g.AccessCollected) {
         if ($g.Groups.Count -gt 0) { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'groups')`" style='cursor:pointer' title='Direct group memberships. Click to view details.'>Groups: $($g.Groups.Count)</span>") }
         if ($g.Teams.Count -gt 0)  { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'teams')`" style='cursor:pointer' title='Microsoft Teams the guest is a member of. Click to view details.'>Teams: $($g.Teams.Count)</span>") }
         if ($g.Apps.Count -gt 0)   { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'apps')`" style='cursor:pointer' title='Applications with an app role assignment for this guest, directly or through a group the guest is a direct member of. Click to view details.'>Apps: $($g.Apps.Count)</span>") }
     }
-    if ($g.Roles.Count -gt 0) { $accessBadges.Add("<span class='badge purple' onclick=`"$(Get-ModalOnClick $key 'roles')`" style='cursor:pointer' title='Entra ID directory roles, assigned directly or through a role-assignable group. Click to view details.'>Roles: $($g.Roles.Count)</span>") }
+    if ($g.Roles.Count -gt 0) { $accessBadges.Add("<span class='badge purple' onclick=`"$(Get-ModalOnClick $key 'roles')`" style='cursor:pointer' title='Entra ID directory roles, active or eligible (PIM), held directly or through a role-assignable group. Click to view details.'>Roles: $($g.Roles.Count)$(if ($eligibleRoleCount -gt 0) { " ($eligibleRoleCount eligible)" })</span>") }
     if (-not $g.AccessCollected) {
         $accessBadges.Add("<span class='badge gray' title='Not collected (-SkipAccessDetails).'>Not collected</span>")
     } elseif ($accessBadges.Count -eq 0) {
@@ -1766,11 +1802,13 @@ foreach ($g in $sortedReport) {
     if ($g.Roles.Count -gt 0) {
         $rows = ($g.Roles | Sort-Object Role | ForEach-Object {
             $roleLink = "<a href='$(Get-EntraRoleLearnUrl $_.Role)' target='_blank' rel='noopener'>$(ConvertTo-HtmlSafe $_.Role)</a>"
-            New-ModalRowHtml @($roleLink, (ConvertTo-HtmlSafe $_.Via), (ConvertTo-HtmlSafe $_.Scope))
+            $endsText = if ($_.Type -ne 'Eligible') { '' } elseif ($_.Ends) { Format-ReportDate $_.Ends } else { 'No expiry' }
+            New-ModalRowHtml @($roleLink, (ConvertTo-HtmlSafe $_.Type), (ConvertTo-HtmlSafe $_.Via), (ConvertTo-HtmlSafe $_.Scope), $endsText)
         }) -join ''
+        $eligibilityNote = if ($script:eligibilityAvailable) { '' } else { ' Eligible (PIM) assignments could not be read in this run, so only active roles are listed.' }
         $rolesHtml = "<div class='info-banner'>External accounts with directory roles are a common target. Confirm the role is still required and prefer PIM eligible assignments over active ones.</div>" +
-            (New-ModalTableHtml 'rolesModalTable' @('Role', 'Assignment', 'Scope') $rows) +
-            "<p class='modal-note'>Active role assignments (including activated PIM assignments). PIM eligible assignments are not included.</p>"
+            (New-ModalTableHtml 'rolesModalTable' @('Role', 'Type', 'Assignment', 'Scope', 'Eligible until') $rows) +
+            "<p class='modal-note'><strong>Active</strong> roles are assigned permanently or currently activated through PIM. <strong>Eligible</strong> roles must be activated in PIM before they can be used.$eligibilityNote</p>"
     }
 
     $sponsorsHtml = ''
@@ -1787,7 +1825,7 @@ foreach ($g in $sortedReport) {
     $groupNames   = @($g.Groups | ForEach-Object { $_.Name }) -join ', '
     $teamNames    = @($g.Teams | ForEach-Object { $_.Name }) -join ', '
     $appNames     = @($g.Apps | ForEach-Object { if ($_.Via -eq 'Direct') { "$($_.Name) ($($_.Role))" } else { "$($_.Name) ($($_.Role), via $($_.Via.ToLower()))" } }) -join ', '
-    $roleNames    = @($g.Roles | ForEach-Object { "$($_.Role) ($($_.Via))" }) -join ', '
+    $roleNames    = @($g.Roles | ForEach-Object { "$($_.Role) ($($_.Type), $($_.Via))" }) -join ', '
     $sponsorNames = @($g.Sponsors | ForEach-Object { $_.Name }) -join ', '
     $reasonText   = @($g.Reasons | ForEach-Object { $_.Text }) -join ' | '
     $searchText = ConvertTo-HtmlSafe ((@($g.DisplayName, $g.UserPrincipalName, $g.Mail, $g.Domain, $g.CompanyName, $sponsorNames, $groupNames, $teamNames, $appNames, $roleNames) | Where-Object { $_ }) -join ' ').ToLower()
@@ -1853,7 +1891,7 @@ $reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`
             yes: 'Yes', no: 'No',
             new: 'New Guest', lastyear: 'Last Year', over1y: '+1 Year',
             guest: 'Guest', member: 'External Member',
-            entra: 'Entra ID', msa: 'Microsoft Account', otp: 'Email OTP', google: 'Google', other: 'Other', unredeemed: 'Not Redeemed',
+            entra: 'Entra ID', msa: 'Microsoft Account', otp: 'Email OTP', google: 'Google', facebook: 'Facebook', other: 'Other', unredeemed: 'Not Redeemed',
             groups: 'Groups', teams: 'Teams', apps: 'Apps', roles: 'Directory Roles', noaccess: 'No Access',
             has: 'Has Sponsor', nosponsor: 'No Sponsor'
         };
@@ -2198,7 +2236,7 @@ if ($script:signInDataAvailable) {
 Write-Host "  - Pending invitations: $pendingCount" -ForegroundColor DarkYellow
 Write-Host "  - Disabled accounts: $disabledCount" -ForegroundColor Gray
 Write-Host "`nGovernance Analysis:" -ForegroundColor White
-Write-Host "  - Guests with directory roles: $privilegedCount" -ForegroundColor Red
+Write-Host "  - Guests with directory roles (active or eligible): $privilegedCount" -ForegroundColor Red
 if (-not $SkipAccessDetails) {
     Write-Host "  - Guests without a sponsor: $noSponsorCount" -ForegroundColor DarkYellow
 }
@@ -2207,8 +2245,8 @@ if (-not $SkipAccessDetails) {
 # (TF_BUILD is set by the agent). No effect on local or interactive runs.
 if ($env:TF_BUILD -eq 'True') {
     if ($privilegedCount -gt 0) {
-        Write-Host "##vso[task.logissue type=warning]$privilegedCount guest(s) hold Entra ID directory roles - review the EntraIDGuestReport artifact."
-        Write-Host "##vso[task.complete result=SucceededWithIssues;]Guests with directory roles found"
+        Write-Host "##vso[task.logissue type=warning]$privilegedCount guest(s) hold or are eligible for Entra ID directory roles - review the EntraIDGuestReport artifact."
+        Write-Host "##vso[task.complete result=SucceededWithIssues;]Guests with active or eligible directory roles found"
     }
 
     # Markdown summary shown as a tab on the pipeline run (same numbers as the console summary)
@@ -2229,7 +2267,7 @@ Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm') &middot; **$totalGuests** guest
 | Never signed in | $(if ($script:signInDataAvailable) { $neverSignedInCount } else { 'n/a' }) |
 | Inactive ($InactiveDays+ days) | $(if ($script:signInDataAvailable) { $inactiveCount } else { 'n/a' }) |
 | Disabled | $disabledCount |
-| Directory roles | $privilegedCount |
+| Directory roles (active or eligible) | $privilegedCount |
 | No sponsor | $(if ($SkipAccessDetails) { 'n/a' } else { $noSponsorCount }) |
 
 Thresholds: inactive $InactiveDays days, remove $RemoveAfterDays days, pending invitation $PendingInvitationDays days.

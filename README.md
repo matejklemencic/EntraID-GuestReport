@@ -12,9 +12,9 @@ The script connects to Microsoft Graph, retrieves every guest account in the ten
   - **Groups**: direct memberships (nested groups are not followed), with group type (Microsoft 365, Security, Mail-enabled security, Distribution, dynamic) and a role-assignable flag
   - **Teams**: Microsoft 365 groups with a team provisioned, with visibility
   - **Applications**: app role assignments Microsoft Graph returns for the guest, including those granted to groups the guest is a direct member of (nested groups are not included), with the role name resolved and a **Via** column that shows whether the assignment is direct or comes from a group
-  - **Directory roles**: Entra ID roles assigned directly to the guest, or through a role-assignable group the guest is a member of, including administrative-unit scope
+  - **Directory roles**: Entra ID roles held directly by the guest, or through a role-assignable group the guest is a direct member of, including administrative-unit scope. Both **active** roles (permanent, or currently activated through PIM) and **eligible** roles (PIM, must be activated before use, with the eligibility end date) are shown
 - **Sponsors**: the users or groups recorded as responsible for the guest
-- **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, other federated IdPs, not redeemed, or On-Prem Synced for accounts synchronized from on-premises AD (they never redeem an invitation)
+- **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, Facebook, other federated IdPs, not redeemed, or On-Prem Synced for accounts synchronized from on-premises AD (they never redeem an invitation)
 - **Guest domain**: the guest's home domain, read from the mail address or the `#EXT#` user principal name
 - **User type**: B2B guests (`userType = Guest`) and external members (`userType = Member` with an `#EXT#` UPN or an external user state, e.g. from cross-tenant synchronization)
 - **Account state**: enabled/disabled, on-premises synced, creation date (New Guest / Last Year / +1 Year buckets)
@@ -44,7 +44,7 @@ Modifiers applied afterwards:
 |--------|--------|
 | Account disabled and inactive / no sign-in recorded | Review → **Remove** |
 | Account disabled but recently active or new | Keep → Review |
-| Holds one or more directory roles (directly or through a role-assignable group) | Keep → Review, and always listed as a reason |
+| Holds or is eligible for one or more directory roles (directly or through a role-assignable group) | Keep → Review, and always listed as a reason |
 | Synchronized from on-premises Active Directory | No change to the recommendation. The suggested action says the change must be made in on-premises AD, because changes in Entra ID are overwritten by the next sync |
 | No sponsor, or no group/Teams/app/role access at all | Listed as information; doesn't change the recommendation |
 
@@ -60,7 +60,7 @@ Reading `signInActivity` requires an **Entra ID P1 or P2** license and the `Audi
 
 | Feature | Detail |
 |---------|--------|
-| Summary cards | Clickable cards for total guests, Remove, Review, Keep, pending invitations, no sign-in recorded, inactive, disabled, guests with directory roles, and guests without a sponsor, each filtering the table |
+| Summary cards | Clickable cards for total guests, Remove, Review, Keep, pending invitations, no sign-in recorded, inactive, disabled, guests with active or eligible directory roles, and guests without a sponsor, each filtering the table |
 | Search | Debounced real-time text search across name, UPN, mail, domain, company, sponsor, group, team, app and role names |
 | Filter panel | Multi-dimensional filter tags for recommendation, last sign-in bucket, invitation state, enabled state, creation date bucket, user type, identity provider (including On-Prem Synced), access type and sponsor |
 | Column sort | Click any sortable column header to sort ascending; click again to reverse |
@@ -79,7 +79,7 @@ Badges that only act as filters (User Type, Identity, Invitation, Enabled, New, 
 | Access | Groups: N | Direct group memberships with type and role-assignable flag; each group links to the Entra portal |
 | Access | Teams: N | Teams the guest is a member of, with visibility |
 | Access | Apps: N | Applications with an app role assignment for the guest, with the assigned role, **Via** (Direct, or the group the assignment was made to) and assignment date |
-| Access | Roles: N | Directory roles with assignment path (Direct or via group) and scope; each role links to the Microsoft Learn built-in roles reference |
+| Access | Roles: N (M eligible) | Directory roles with type (Active or Eligible), assignment path (Direct or via group), scope and, for eligible roles, the eligibility end date; each role links to the Microsoft Learn built-in roles reference |
 | Sponsors | N sponsor(s) | Sponsor name, UPN/mail and type (user or group) |
 | Recommendation | Remove / Review / Keep | Suggested action, every reason that contributed, and the thresholds used |
 | Guest | New | Plain filter badge for guests created in the last 30 days |
@@ -109,10 +109,13 @@ The identity used to run the script (user, service principal, or managed identit
 | `User.Read.All` | Read guest and external member accounts and their sponsors |
 | `AuditLog.Read.All` | Read sign-in activity (also requires an Entra ID P1/P2 license) |
 | `Directory.Read.All` | Read group memberships, app role assignments and application roles |
-| `RoleManagement.Read.Directory` | Read directory role assignments |
+| `RoleManagement.Read.Directory` | Read directory role assignments and eligible (PIM) role assignments |
 
 For **interactive (user) runs**, these are requested as delegated scopes during sign-in. The signed-in user also needs a Microsoft Entra role for these calls, as listed in the Microsoft Graph documentation: Reports Reader (at least) for sign-in activity, and for the other calls a role such as Directory Readers (app role assignments, directory role assignments, sponsors), Global Reader or Guest Inviter (sponsors). Check the role requirements on each API page before using a least-privilege role.
 
+### Eligible (PIM) roles
+
+Eligible role assignments come from the PIM role eligibility schedules and are read with the same `RoleManagement.Read.Directory` permission. For interactive runs, Learn lists Global Reader, Security Reader, Security Operator, Security Administrator or Privileged Role Administrator as the roles that can read them. If the tenant doesn't have PIM available, or the account can't read eligibility, the script logs a warning and continues. The report then shows a banner and the Roles modal says that only active roles are listed, so a guest that is merely *eligible* for a role is not flagged in that run.
 ## Parameters
 
 | Parameter | Type | Default | Description |
@@ -126,7 +129,7 @@ For **interactive (user) runs**, these are requested as delegated scopes during 
 | `-NonInteractive` | Switch | None | Suppress all prompts and skip automatic browser launch. Required for unattended or pipeline runs. |
 | `-TargetUser` | String | None | Analyze a single guest or external member by object ID or user principal name. Skips tenant enumeration and the confirmation prompt. |
 | `-ExcludeExternalMembers` | Switch | None | Only report `userType = Guest` accounts; skip external members. |
-| `-SkipAccessDetails` | Switch | None | Skip group, Teams, application and sponsor collection. Directly assigned directory roles are still reported. Useful on very large tenants. |
+| `-SkipAccessDetails` | Switch | None | Skip group, Teams, application and sponsor collection. Directory roles (active and eligible) are still reported. Useful on very large tenants. |
 | `-InactiveDays` | Int | `90` | Days without a sign-in after which a guest is marked for Review. |
 | `-RemoveAfterDays` | Int | `365` | Days without a sign-in after which a guest is marked for Remove. Must be greater than `-InactiveDays`. |
 | `-PendingInvitationDays` | Int | `30` | Days after which an unredeemed invitation is marked for Remove. |
@@ -197,7 +200,7 @@ The included `azure-pipelines.yml` automates weekly report generation using a fe
 3. The `AzurePowerShell@5` task authenticates using the ADO service connection (`azureSubscription`), which uses **Workload Identity Federation**. The task retries once on transient failures.
 4. The task obtains a Graph access token from the authenticated Az context and passes it to the script via `-AccessToken`.
 5. The HTML report is saved to `$(Build.ArtifactStagingDirectory)` and published as a pipeline artifact named `EntraIDGuestReport`.
-6. The run gets a **markdown summary tab** with the recommendation and signal counts. If any guest holds an Entra ID directory role, the script logs a pipeline warning and the run completes as **SucceededWithIssues** (orange). These signals are emitted only when the script detects an ADO agent via `TF_BUILD`; local runs are unaffected.
+6. The run gets a **markdown summary tab** with the recommendation and signal counts. If any guest holds or is eligible for an Entra ID directory role, the script logs a pipeline warning and the run completes as **SucceededWithIssues** (orange). These signals are emitted only when the script detects an ADO agent via `TF_BUILD`; local runs are unaffected.
 
 > **Token lifetime:** the Graph token obtained via the service connection is valid for roughly an hour and can't be refreshed mid-run. Directory role assignments are pre-fetched in bulk and per-guest details use JSON batching to stay well within that window. On very large tenants, add `-SkipAccessDetails` to the script call in the pipeline.
 
