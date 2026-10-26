@@ -1402,7 +1402,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
                 <strong>Tenant:</strong> $(ConvertTo-HtmlSafe $tenantName) &nbsp;&middot;&nbsp;
                 <strong>Tenant ID:</strong> $(ConvertTo-HtmlSafe $tenantId) &nbsp;&middot;&nbsp;
                 <strong>Generated:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") &nbsp;&middot;&nbsp;
-                <strong>Thresholds:</strong> inactive $InactiveDays d, remove $RemoveAfterDays d, pending invitation $PendingInvitationDays d
+                <strong>Thresholds:</strong> inactive $InactiveDays days, remove $RemoveAfterDays days, pending invitation $PendingInvitationDays days
             </div>
         </div>
         <a class="github-link" href="https://github.com/matejklemencic/EntraID-GuestReport" target="_blank" rel="noopener" title="View source on GitHub"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 16 16" fill="#ffffff"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
@@ -1513,9 +1513,9 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
         </div>
         <div class="filter-group">
             <span class="filter-group-label">Last Sign-In</span>
-            <span class="filter-tag c-green"  data-group="activity" data-value="active"   onclick="toggleTag(this)">Active (&lt; $InactiveDays d) <span class="cnt"></span></span>
-            <span class="filter-tag c-orange" data-group="activity" data-value="inactive" onclick="toggleTag(this)">Inactive ($InactiveDays+ d) <span class="cnt"></span></span>
-            <span class="filter-tag c-red"    data-group="activity" data-value="stale"    onclick="toggleTag(this)">Stale ($RemoveAfterDays+ d) <span class="cnt"></span></span>
+            <span class="filter-tag c-green"  data-group="activity" data-value="active"   onclick="toggleTag(this)">Active (&lt; $InactiveDays days) <span class="cnt"></span></span>
+            <span class="filter-tag c-orange" data-group="activity" data-value="inactive" onclick="toggleTag(this)">Inactive ($InactiveDays+ days) <span class="cnt"></span></span>
+            <span class="filter-tag c-red"    data-group="activity" data-value="stale"    onclick="toggleTag(this)">Stale ($RemoveAfterDays+ days) <span class="cnt"></span></span>
             <span class="filter-tag c-orange" data-group="activity" data-value="never"    onclick="toggleTag(this)">Never <span class="cnt"></span></span>
             $unknownActivityTag
         </div>
@@ -1650,7 +1650,7 @@ foreach ($g in $sortedReport) {
     if ($g.AccessCollected) {
         if ($g.Groups.Count -gt 0) { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'groups')`" style='cursor:pointer' title='Direct group memberships. Click to view details.'>Groups: $($g.Groups.Count)</span>") }
         if ($g.Teams.Count -gt 0)  { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'teams')`" style='cursor:pointer' title='Microsoft Teams the guest is a member of. Click to view details.'>Teams: $($g.Teams.Count)</span>") }
-        if ($g.Apps.Count -gt 0)   { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'apps')`" style='cursor:pointer' title='Applications assigned directly to the guest. Click to view details.'>Apps: $($g.Apps.Count)</span>") }
+        if ($g.Apps.Count -gt 0)   { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'apps')`" style='cursor:pointer' title='Applications with an app role assignment for this guest, as reported by Microsoft Graph. Click to view details.'>Apps: $($g.Apps.Count)</span>") }
     }
     if ($g.Roles.Count -gt 0) { $accessBadges.Add("<span class='badge purple' onclick=`"$(Get-ModalOnClick $key 'roles')`" style='cursor:pointer' title='Entra ID directory roles, assigned directly or through a role-assignable group. Click to view details.'>Roles: $($g.Roles.Count)</span>") }
     if (-not $g.AccessCollected) {
@@ -1740,7 +1740,7 @@ foreach ($g in $sortedReport) {
             New-ModalRowHtml @($nameCell, (ConvertTo-HtmlSafe $_.Role), (Format-ReportDate $_.Assigned))
         }) -join ''
         $appsHtml = (New-ModalTableHtml 'appsModalTable' @('Application', 'Role', 'Assigned') $rows) +
-            "<p class='modal-note'>Direct assignments only. Access granted through group assignments is visible in the Groups list.</p>"
+            "<p class='modal-note'>App role assignments as reported by Microsoft Graph for this guest. The list does not show whether an assignment was made directly or through a group.</p>"
     }
 
     $rolesHtml = ''
