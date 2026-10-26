@@ -396,9 +396,12 @@ function Get-GuestDomain {
     return ''
 }
 
-# Identity provider the guest redeemed the invitation with, read from the identities collection
+# Identity provider the guest redeemed the invitation with, read from the identities collection.
+# Accounts synchronized from on-premises AD never redeemed an invitation and carry no external
+# identity, so they are reported as their own source instead of "Unknown".
 function Get-IdentityProvider {
-    param($Identities, [string]$Invitation)
+    param($Identities, [string]$Invitation, [bool]$OnPremisesSynced = $false)
+    if ($OnPremisesSynced) { return @{ Key = 'onprem'; Label = 'On-Prem Synced' } }
     $issuers = @(@($Identities) | Where-Object { $_ -and $_.signInType -ne 'userPrincipalName' } | ForEach-Object { [string]$_.issuer } | Where-Object { $_ })
     if ($issuers -contains 'ExternalAzureAD')  { return @{ Key = 'entra';  Label = 'Entra ID' } }
     if ($issuers -contains 'MicrosoftAccount') { return @{ Key = 'msa';    Label = 'Microsoft Account' } }
@@ -442,7 +445,7 @@ function New-Reason {
     [PSCustomObject]@{ Level = $Level; Text = $Text }
 }
 
-# Cleanup recommendation for one guest: Remove / Review / Keep (or On-Prem for synced accounts),
+# Cleanup recommendation for one guest: Remove / Review / Keep,
 # with the list of reasons that led to it. Thresholds come from the script parameters.
 function Get-CleanupRecommendation {
     param($Guest)
@@ -521,9 +524,10 @@ function Get-CleanupRecommendation {
         }
     }
 
+    # Synced accounts are assessed like any other guest; only the place where the action has to
+    # be taken differs (see $recAction in the report section).
     if ($Guest.OnPremisesSynced) {
-        $rec = 'onprem'
-        $reasons.Add((New-Reason 'info' "Synchronized from on-premises Active Directory. Changes made in Entra ID are overwritten by the next sync"))
+        $reasons.Add((New-Reason 'info' "Synchronized from on-premises Active Directory. Changes made in Entra ID are overwritten by the next sync, so act on the source directory"))
     }
 
     return @{ Recommendation = $rec; Reasons = $reasons }
@@ -833,7 +837,7 @@ foreach ($u in $rawUsers) {
         }
     }
 
-    $identityProvider = Get-IdentityProvider $u.identities $invitation
+    $identityProvider = Get-IdentityProvider $u.identities $invitation ([bool]$u.onPremisesSyncEnabled)
 
     $guest = [PSCustomObject]@{
         Id                        = [string]$u.id
@@ -890,7 +894,10 @@ $totalGuests        = @($report).Count
 $removeCount        = @($report | Where-Object { $_.Recommendation -eq 'remove' }).Count
 $reviewCount        = @($report | Where-Object { $_.Recommendation -eq 'review' }).Count
 $keepCount          = @($report | Where-Object { $_.Recommendation -eq 'keep' }).Count
-$onPremCount        = @($report | Where-Object { $_.Recommendation -eq 'onprem' }).Count
+$onPremCount        = @($report | Where-Object { $_.OnPremisesSynced }).Count
+$removeOnPremCount  = @($report | Where-Object { $_.Recommendation -eq 'remove' -and $_.OnPremisesSynced }).Count
+$reviewOnPremCount  = @($report | Where-Object { $_.Recommendation -eq 'review' -and $_.OnPremisesSynced }).Count
+$keepOnPremCount    = @($report | Where-Object { $_.Recommendation -eq 'keep' -and $_.OnPremisesSynced }).Count
 $pendingCount       = @($report | Where-Object { $_.Invitation -eq 'pending' }).Count
 $neverSignedInCount = @($report | Where-Object { $_.ActivityBucket -eq 'never' }).Count
 $inactiveCount      = @($report | Where-Object { $_.ActivityBucket -in @('inactive', 'stale') }).Count
@@ -1472,36 +1479,15 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
         <input type="text" id="searchInput" class="filter-search" placeholder="Search by name, email, domain, company, sponsor, group, team, app or role..." oninput="queueApplyFilters()">
 
         <div class="filter-group">
-            <span class="filter-group-label">Recommendation</span>
-            <span class="filter-tag c-red"   data-group="rec" data-value="remove" onclick="toggleTag(this)">Remove <span class="cnt"></span></span>
-            <span class="filter-tag c-amber" data-group="rec" data-value="review" onclick="toggleTag(this)">Review <span class="cnt"></span></span>
-            <span class="filter-tag c-green" data-group="rec" data-value="keep"   onclick="toggleTag(this)">Keep <span class="cnt"></span></span>
-            <span class="filter-tag c-gray"  data-group="rec" data-value="onprem" onclick="toggleTag(this)">On-Prem <span class="cnt"></span></span>
-        </div>
-        <div class="filter-group">
-            <span class="filter-group-label">Last Sign-In</span>
-            <span class="filter-tag c-green"  data-group="activity" data-value="active"   onclick="toggleTag(this)">Active (&lt; $InactiveDays d) <span class="cnt"></span></span>
-            <span class="filter-tag c-orange" data-group="activity" data-value="inactive" onclick="toggleTag(this)">Inactive ($InactiveDays+ d) <span class="cnt"></span></span>
-            <span class="filter-tag c-red"    data-group="activity" data-value="stale"    onclick="toggleTag(this)">Stale ($RemoveAfterDays+ d) <span class="cnt"></span></span>
-            <span class="filter-tag c-orange" data-group="activity" data-value="never"    onclick="toggleTag(this)">Never <span class="cnt"></span></span>
-            $unknownActivityTag
-        </div>
-        <div class="filter-group">
-            <span class="filter-group-label">Invitation</span>
-            <span class="filter-tag c-green" data-group="invitation" data-value="accepted" onclick="toggleTag(this)">Accepted <span class="cnt"></span></span>
-            <span class="filter-tag c-amber" data-group="invitation" data-value="pending"  onclick="toggleTag(this)">Pending <span class="cnt"></span></span>
-            <span class="filter-tag c-gray"  data-group="invitation" data-value="none"     onclick="toggleTag(this)">No Invitation State <span class="cnt"></span></span>
+            <span class="filter-group-label">Created</span>
+            <span class="filter-tag c-orange" data-group="created" data-value="new"      onclick="toggleTag(this)">New Guest <span class="cnt"></span></span>
+            <span class="filter-tag c-blue"   data-group="created" data-value="lastyear" onclick="toggleTag(this)">Last Year <span class="cnt"></span></span>
+            <span class="filter-tag c-gray"   data-group="created" data-value="over1y"   onclick="toggleTag(this)">+1 Year <span class="cnt"></span></span>
         </div>
         <div class="filter-group">
             <span class="filter-group-label">Enabled</span>
             <span class="filter-tag c-green" data-group="enabled" data-value="yes" onclick="toggleTag(this)">Enabled <span class="cnt"></span></span>
             <span class="filter-tag c-gray"  data-group="enabled" data-value="no"  onclick="toggleTag(this)">Disabled <span class="cnt"></span></span>
-        </div>
-        <div class="filter-group">
-            <span class="filter-group-label">Created</span>
-            <span class="filter-tag c-orange" data-group="created" data-value="new"      onclick="toggleTag(this)">New Guest <span class="cnt"></span></span>
-            <span class="filter-tag c-blue"   data-group="created" data-value="lastyear" onclick="toggleTag(this)">Last Year <span class="cnt"></span></span>
-            <span class="filter-tag c-gray"   data-group="created" data-value="over1y"   onclick="toggleTag(this)">+1 Year <span class="cnt"></span></span>
         </div>
         <div class="filter-group">
             <span class="filter-group-label">User Type</span>
@@ -1510,13 +1496,28 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
         </div>
         <div class="filter-group">
             <span class="filter-group-label">Identity</span>
-            <span class="filter-tag c-blue"  data-group="identity" data-value="entra"      onclick="toggleTag(this)">Entra ID <span class="cnt"></span></span>
+            <span class="filter-tag c-green"  data-group="identity" data-value="entra"      onclick="toggleTag(this)">Entra ID <span class="cnt"></span></span>
             <span class="filter-tag c-blue"  data-group="identity" data-value="msa"        onclick="toggleTag(this)">Microsoft Account <span class="cnt"></span></span>
-            <span class="filter-tag c-blue"  data-group="identity" data-value="otp"        onclick="toggleTag(this)">Email OTP <span class="cnt"></span></span>
+            <span class="filter-tag c-amber"  data-group="identity" data-value="otp"        onclick="toggleTag(this)">Email OTP <span class="cnt"></span></span>
             <span class="filter-tag c-blue"  data-group="identity" data-value="google"     onclick="toggleTag(this)">Google <span class="cnt"></span></span>
-            <span class="filter-tag c-gray"  data-group="identity" data-value="other"      onclick="toggleTag(this)">Other <span class="cnt"></span></span>
-            <span class="filter-tag c-amber" data-group="identity" data-value="unredeemed" onclick="toggleTag(this)">Not Redeemed <span class="cnt"></span></span>
+            <span class="filter-tag c-purple"  data-group="identity" data-value="other"      onclick="toggleTag(this)">Other <span class="cnt"></span></span>
+            <span class="filter-tag c-gray" data-group="identity" data-value="unredeemed" onclick="toggleTag(this)">Not Redeemed <span class="cnt"></span></span>
+            <span class="filter-tag c-green"  data-group="identity" data-value="onprem"     onclick="toggleTag(this)">On-Prem Synced <span class="cnt"></span></span>
             <span class="filter-tag c-gray"  data-group="identity" data-value="unknown"    onclick="toggleTag(this)">Unknown <span class="cnt"></span></span>
+        </div>
+        <div class="filter-group">
+            <span class="filter-group-label">Invitation</span>
+            <span class="filter-tag c-green" data-group="invitation" data-value="accepted" onclick="toggleTag(this)">Accepted <span class="cnt"></span></span>
+            <span class="filter-tag c-amber" data-group="invitation" data-value="pending"  onclick="toggleTag(this)">Pending <span class="cnt"></span></span>
+            <span class="filter-tag c-gray"  data-group="invitation" data-value="none"     onclick="toggleTag(this)">No Invitation State <span class="cnt"></span></span>
+        </div>
+        <div class="filter-group">
+            <span class="filter-group-label">Last Sign-In</span>
+            <span class="filter-tag c-green"  data-group="activity" data-value="active"   onclick="toggleTag(this)">Active (&lt; $InactiveDays d) <span class="cnt"></span></span>
+            <span class="filter-tag c-orange" data-group="activity" data-value="inactive" onclick="toggleTag(this)">Inactive ($InactiveDays+ d) <span class="cnt"></span></span>
+            <span class="filter-tag c-red"    data-group="activity" data-value="stale"    onclick="toggleTag(this)">Stale ($RemoveAfterDays+ d) <span class="cnt"></span></span>
+            <span class="filter-tag c-orange" data-group="activity" data-value="never"    onclick="toggleTag(this)">Never <span class="cnt"></span></span>
+            $unknownActivityTag
         </div>
         <div class="filter-group">
             <span class="filter-group-label">Access</span>
@@ -1532,9 +1533,10 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <span class="filter-tag c-amber" data-group="sponsor" data-value="nosponsor" onclick="toggleTag(this)">No Sponsor <span class="cnt"></span></span>
         </div>
         <div class="filter-group">
-            <span class="filter-group-label">Source</span>
-            <span class="filter-tag c-blue" data-group="source" data-value="cloud"  onclick="toggleTag(this)">Cloud <span class="cnt"></span></span>
-            <span class="filter-tag c-gray" data-group="source" data-value="onprem" onclick="toggleTag(this)">On-Premises Synced <span class="cnt"></span></span>
+            <span class="filter-group-label">Recommendation</span>
+            <span class="filter-tag c-red"   data-group="rec" data-value="remove" onclick="toggleTag(this)">Remove <span class="cnt"></span></span>
+            <span class="filter-tag c-amber" data-group="rec" data-value="review" onclick="toggleTag(this)">Review <span class="cnt"></span></span>
+            <span class="filter-tag c-green" data-group="rec" data-value="keep"   onclick="toggleTag(this)">Keep <span class="cnt"></span></span>
         </div>
 
         <div class="filter-results">
@@ -1549,12 +1551,12 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
         <thead>
             <tr>
                 <th onclick="sortTable('reportTable', 0, 'string')">Guest</th>
-                <th onclick="sortTable('reportTable', 1, 'string')">Domain</th>
-                <th onclick="sortTable('reportTable', 2, 'string')">User Type</th>
-                <th onclick="sortTable('reportTable', 3, 'string')">Identity</th>
-                <th onclick="sortTable('reportTable', 4, 'string')">Created</th>
-                <th onclick="sortTable('reportTable', 5, 'string')">Invitation</th>
-                <th onclick="sortTable('reportTable', 6, 'string')">Enabled</th>
+                <th onclick="sortTable('reportTable', 1, 'string')">Created</th>
+                <th onclick="sortTable('reportTable', 2, 'string')">Enabled</th>
+                <th onclick="sortTable('reportTable', 3, 'string')">Domain</th>
+                <th onclick="sortTable('reportTable', 4, 'string')">User Type</th>
+                <th onclick="sortTable('reportTable', 5, 'string')">Identity</th>
+                <th onclick="sortTable('reportTable', 6, 'string')">Invitation</th>
                 <th onclick="sortTable('reportTable', 7, 'string')">Last Sign-In</th>
                 <th>Access</th>
                 <th onclick="sortTable('reportTable', 9, 'string')">Sponsors</th>
@@ -1569,28 +1571,36 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
                 <th class="csv-only">Applications</th>
                 <th class="csv-only">Directory Roles</th>
                 <th class="csv-only">Sponsor Names</th>
+                <th class="csv-only">Source</th>
                 <th class="csv-only">Reasons</th>
             </tr>
         </thead>
         <tbody>
 "@)
 
-# Sort: Remove first, then Review, Keep, On-Prem; within a group the longest inactive first
-$recOrder = @{ remove = 1; review = 2; keep = 3; onprem = 4 }
+# Sort: Remove first, then Review, Keep; within a group the longest inactive first
+$recOrder = @{ remove = 1; review = 2; keep = 3 }
 $sortedReport = @($report | Sort-Object @{ Expression = { $recOrder[$_.Recommendation] } },
                                         @{ Expression = { if ($null -eq $_.DaysSinceActivity) { [int]::MaxValue } else { $_.DaysSinceActivity } }; Descending = $true },
                                         @{ Expression = { $_.DisplayName } })
 $modalDataEntries = [System.Collections.Generic.List[string]]::new()
 
-$recBadgeColor = @{ remove = 'red'; review = 'amber'; keep = 'green'; onprem = 'gray' }
-$recLabel      = @{ remove = 'Remove'; review = 'Review'; keep = 'Keep'; onprem = 'On-Prem' }
+$recBadgeColor = @{ remove = 'red'; review = 'amber'; keep = 'green' }
+$recLabel      = @{ remove = 'Remove'; review = 'Review'; keep = 'Keep' }
 $recAction     = @{
     remove = 'Delete this guest account. Deleted users can be restored from Deleted users within 30 days.'
     review = 'Confirm with the sponsor or the owners of the resources this guest can access whether access is still needed. Consider an Access Review for recurring checks.'
     keep   = 'No action needed at this time.'
-    onprem = 'This account is synchronized from on-premises Active Directory. Disable or delete it in the source directory.'
+}
+# Synced accounts: the action is the same, but it has to be performed in the source directory
+$recActionOnPrem = @{
+    remove = 'Delete this account in on-premises Active Directory (or remove it from the sync scope). Deleting it in Entra ID is overwritten by the next sync.'
+    review = 'Confirm with the sponsor or the owners of the resources this guest can access whether access is still needed. Any change must be made in on-premises Active Directory, because changes in Entra ID are overwritten by the next sync.'
+    keep   = 'No action needed at this time.'
 }
 $reasonBadge = @{ remove = 'red'; review = 'amber'; keep = 'green'; info = 'gray' }
+# Identity badge colors: green = organizationally managed, blue = consumer identity, amber = weakest assurance (email OTP), purple = custom federation, gray = no external identity
+$identityBadgeColor = @{ entra = 'green'; onprem = 'green'; msa = 'blue'; google = 'blue'; otp = 'amber'; other = 'purple'; unredeemed = 'gray'; unknown = 'gray' }
 
 foreach ($g in $sortedReport) {
     # Object ID from Graph - escaped for consistency with every other API-sourced field.
@@ -1602,17 +1612,14 @@ foreach ($g in $sortedReport) {
     $portalUrl = "https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/$key"
     $newBadge = if ($g.CreatedBucket -eq 'new') { "<span class='badge orange clickable-badge csv-exclude' data-fg='created' data-fv='new' title='Created within the last $NewGuestDays days.'>New</span> " } else { '' }
 
-    # User type / source
+    # User type
     $userTypeText = if ($g.UserType -eq 'guest') {
         "<span class='badge blue clickable-badge' data-fg='usertype' data-fv='guest' title='B2B guest (userType Guest).'>Guest</span>"
     } else {
         "<span class='badge purple clickable-badge' data-fg='usertype' data-fv='member' title='External B2B user with userType Member, e.g. invited as a member or created by cross-tenant synchronization. Members get the same default directory permissions as employees.'>External Member</span>"
     }
-    if ($g.OnPremisesSynced) {
-        $userTypeText += "<div style='margin-top:4px'><span class='badge gray clickable-badge' data-fg='source' data-fv='onprem' title='Synchronized from on-premises Active Directory.'>On-Prem Synced</span></div>"
-    }
-
-    $identityText = "<span class='badge gray clickable-badge' data-fg='identity' data-fv='$($g.IdentityKey)' title='Identity provider used to redeem the invitation.'>$(ConvertTo-HtmlSafe $g.IdentityLabel)</span>"
+    $identityTitle = if ($g.OnPremisesSynced) { 'Synchronized from on-premises Active Directory. No invitation was redeemed.' } else { 'Identity provider used to redeem the invitation.' }
+    $identityText = "<span class='badge $($identityBadgeColor[$g.IdentityKey]) clickable-badge' data-fg='identity' data-fv='$($g.IdentityKey)' title='$identityTitle'>$(ConvertTo-HtmlSafe $g.IdentityLabel)</span>"
 
     $invitationText = switch ($g.Invitation) {
         'accepted' { "<span class='badge green clickable-badge' data-fg='invitation' data-fv='accepted' title='Invitation redeemed.'>Accepted</span>" }
@@ -1668,7 +1675,8 @@ foreach ($g in $sortedReport) {
     $recItems = ($g.Reasons | ForEach-Object {
         "<li><span class='badge $($reasonBadge[$_.Level])'>$($_.Level)</span><span>$(ConvertTo-HtmlSafe $_.Text)</span></li>"
     }) -join ''
-    $recHtml = "<div class='rec-header'><div><div class='rec-label'>Cleanup recommendation</div><div class='rec-action'>$($recAction[$g.Recommendation])</div></div><span class='badge $($recBadgeColor[$g.Recommendation])'>$($recLabel[$g.Recommendation])</span></div>" +
+    $actionText = if ($g.OnPremisesSynced) { $recActionOnPrem[$g.Recommendation] } else { $recAction[$g.Recommendation] }
+    $recHtml = "<div class='rec-header'><div><div class='rec-label'>Cleanup recommendation</div><div class='rec-action'>$actionText</div></div><span class='badge $($recBadgeColor[$g.Recommendation])'>$($recLabel[$g.Recommendation])</span></div>" +
                "<ul class='reason-list'>$recItems</ul>" +
                "<p class='modal-note'>Thresholds: inactive after $InactiveDays days, remove after $RemoveAfterDays days without sign-in, unredeemed invitations removed after $PendingInvitationDays days, new guests (under $NewGuestDays days) are kept.</p>"
 
@@ -1766,20 +1774,20 @@ foreach ($g in $sortedReport) {
     $searchText = ConvertTo-HtmlSafe ((@($g.DisplayName, $g.UserPrincipalName, $g.Mail, $g.Domain, $g.CompanyName, $sponsorNames, $groupNames, $teamNames, $appNames, $roleNames) | Where-Object { $_ }) -join ' ').ToLower()
     $daysSinceText = if ($null -ne $g.DaysSinceActivity) { "$($g.DaysSinceActivity)" } else { '' }
 
-    $rowClass = if ($g.Recommendation -eq 'onprem') { '' } else { "rec-$($g.Recommendation)" }
+    $rowClass = "rec-$($g.Recommendation)"
+    $sourceText = if ($g.OnPremisesSynced) { 'On-Premises' } else { 'Cloud' }
     $collectedValue = if ($g.AccessCollected) { 'yes' } else { 'no' }
     $enabledValue = if ($g.AccountEnabled) { 'yes' } else { 'no' }
-    $sourceValue = if ($g.OnPremisesSynced) { 'onprem' } else { 'cloud' }
 
     [void]$sb.Append(@"
-            <tr class="$rowClass" data-search="$searchText" data-rec="$($g.Recommendation)" data-usertype="$($g.UserType)" data-invitation="$($g.Invitation)" data-enabled="$enabledValue" data-createdbucket="$($g.CreatedBucket)" data-activity="$($g.ActivityBucket)" data-identity="$($g.IdentityKey)" data-groupcount="$($g.Groups.Count)" data-teamcount="$($g.Teams.Count)" data-appcount="$($g.Apps.Count)" data-rolecount="$($g.Roles.Count)" data-collected="$collectedValue" data-sponsor="$sponsorValue" data-source="$sourceValue">
+            <tr class="$rowClass" data-search="$searchText" data-rec="$($g.Recommendation)" data-usertype="$($g.UserType)" data-invitation="$($g.Invitation)" data-enabled="$enabledValue" data-createdbucket="$($g.CreatedBucket)" data-activity="$($g.ActivityBucket)" data-identity="$($g.IdentityKey)" data-groupcount="$($g.Groups.Count)" data-teamcount="$($g.Teams.Count)" data-appcount="$($g.Apps.Count)" data-rolecount="$($g.Roles.Count)" data-collected="$collectedValue" data-sponsor="$sponsorValue">
                 <td data-sort="$($safeName.ToLower())">$newBadge<a class="guest-name" href="$portalUrl" target="_blank" title="Open in Entra portal">$safeName</a><div class="muted" style="margin-top:4px">$(ConvertTo-HtmlSafe $contact)</div></td>
+                <td class="cell-sm">$(Format-ReportDate $g.Created)</td>
+                <td class="cell-sm">$enabledText</td>
                 <td>$(ConvertTo-HtmlSafe $g.Domain)</td>
                 <td class="cell-sm">$userTypeText</td>
                 <td class="cell-sm">$identityText</td>
-                <td class="cell-sm">$(Format-ReportDate $g.Created)</td>
                 <td class="cell-sm">$invitationText</td>
-                <td class="cell-sm">$enabledText</td>
                 <td class="cell-sm" data-sort="$activitySort">$activityText</td>
                 <td class="cell-sm"><span class="perm-badges">$accessText</span></td>
                 <td class="cell-sm" data-sort="$($g.Sponsors.Count)">$sponsorText</td>
@@ -1794,6 +1802,7 @@ foreach ($g in $sortedReport) {
                 <td class="csv-only">$(ConvertTo-HtmlSafe $appNames)</td>
                 <td class="csv-only">$(ConvertTo-HtmlSafe $roleNames)</td>
                 <td class="csv-only">$(ConvertTo-HtmlSafe $sponsorNames)</td>
+                <td class="csv-only">$sourceText</td>
                 <td class="csv-only">$(ConvertTo-HtmlSafe $reasonText)</td>
             </tr>
 "@)
@@ -1816,7 +1825,7 @@ $reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`
         const activeFilters = {};
         const groupLabels = {
             rec: 'Recommendation', activity: 'Last Sign-In', invitation: 'Invitation', enabled: 'Enabled', created: 'Created',
-            usertype: 'User Type', identity: 'Identity', access: 'Access', sponsor: 'Sponsor', source: 'Source'
+            usertype: 'User Type', identity: 'Identity', access: 'Access', sponsor: 'Sponsor'
         };
         const valueLabels = {
             remove: 'Remove', review: 'Review', keep: 'Keep', onprem: 'On-Prem',
@@ -1827,8 +1836,7 @@ $reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`
             guest: 'Guest', member: 'External Member',
             entra: 'Entra ID', msa: 'Microsoft Account', otp: 'Email OTP', google: 'Google', other: 'Other', unredeemed: 'Not Redeemed',
             groups: 'Groups', teams: 'Teams', apps: 'Apps', roles: 'Directory Roles', noaccess: 'No Access',
-            has: 'Has Sponsor', nosponsor: 'No Sponsor',
-            cloud: 'Cloud'
+            has: 'Has Sponsor', nosponsor: 'No Sponsor'
         };
 
         function rowMatchesTag(row, group, value) {
@@ -1841,7 +1849,6 @@ $reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`
                 case 'created':    return d.createdbucket === value;
                 case 'usertype':   return d.usertype === value;
                 case 'identity':   return d.identity === value;
-                case 'source':     return d.source === value;
                 case 'sponsor':
                     if (value === 'has')       return d.sponsor === 'has';
                     if (value === 'nosponsor') return d.sponsor === 'none';
@@ -2157,10 +2164,10 @@ Write-Host "Total users: $totalGuests" -ForegroundColor White
 Write-Host "  - Guests: $guestTypeCount" -ForegroundColor White
 Write-Host "  - External members: $externalMemberCount" -ForegroundColor White
 Write-Host "`nCleanup Recommendation:" -ForegroundColor White
-Write-Host "  - Remove: $removeCount" -ForegroundColor Red
-Write-Host "  - Review: $reviewCount" -ForegroundColor Yellow
-Write-Host "  - Keep: $keepCount" -ForegroundColor Green
-Write-Host "  - On-premises synced: $onPremCount" -ForegroundColor Gray
+Write-Host "  - Remove: $removeCount ($removeOnPremCount on-premises synced)" -ForegroundColor Red
+Write-Host "  - Review: $reviewCount ($reviewOnPremCount on-premises synced)" -ForegroundColor Yellow
+Write-Host "  - Keep: $keepCount ($keepOnPremCount on-premises synced)" -ForegroundColor Green
+Write-Host "  - On-premises synced (total): $onPremCount. Remove and Review actions for these accounts must be done in on-premises AD" -ForegroundColor Gray
 Write-Host "`nActivity Analysis:" -ForegroundColor White
 if ($script:signInDataAvailable) {
     Write-Host "  - Never signed in: $neverSignedInCount" -ForegroundColor DarkYellow
@@ -2193,10 +2200,9 @@ Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm') &middot; **$totalGuests** guest
 
 | Recommendation | Guests |
 |----------------|--------|
-| Remove | $removeCount |
-| Review | $reviewCount |
-| Keep | $keepCount |
-| On-premises synced | $onPremCount |
+| Remove | $removeCount ($removeOnPremCount on-premises synced) |
+| Review | $reviewCount ($reviewOnPremCount on-premises synced) |
+| Keep | $keepCount ($keepOnPremCount on-premises synced) |
 
 | Signal | Guests |
 |--------|--------|

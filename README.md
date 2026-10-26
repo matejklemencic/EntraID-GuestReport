@@ -14,11 +14,11 @@ The script connects to Microsoft Graph, retrieves every guest account in the ten
   - **Applications**: direct app role assignments, with the role name resolved
   - **Directory roles**: Entra ID roles assigned directly to the guest, or through a role-assignable group the guest is a member of, including administrative-unit scope
 - **Sponsors**: the users or groups recorded as responsible for the guest
-- **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, other federated IdPs, or not redeemed
+- **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, other federated IdPs, not redeemed, or On-Prem Synced for accounts synchronized from on-premises AD (they never redeem an invitation)
 - **Guest domain**: the guest's home domain, read from the mail address or the `#EXT#` user principal name
 - **User type**: B2B guests (`userType = Guest`) and external members (`userType = Member` with an `#EXT#` UPN or an external user state, e.g. from cross-tenant synchronization)
 - **Account state**: enabled/disabled, on-premises synced, creation date (New Guest / Last Year / +1 Year buckets)
-- **Cleanup recommendation**: Remove / Review / Keep (or On-Prem). See [Cleanup recommendation](#cleanup-recommendation).
+- **Cleanup recommendation**: Remove / Review / Keep. See [Cleanup recommendation](#cleanup-recommendation).
 
 The output is a single `.html` file that works offline, with no external dependencies and no server required.
 
@@ -45,7 +45,7 @@ Modifiers applied afterwards:
 | Account disabled and inactive / never signed in | Review → **Remove** |
 | Account disabled but recently active or new | Keep → Review |
 | Holds one or more directory roles (directly or through a role-assignable group) | Keep → Review, and always listed as a reason |
-| Synchronized from on-premises Active Directory | **On-Prem**: changes must be made in the source directory |
+| Synchronized from on-premises Active Directory | No change to the recommendation. The suggested action says the change must be made in on-premises AD, because changes in Entra ID are overwritten by the next sync |
 | No sponsor, or no group/Teams/app/role access at all | Listed as information; doesn't change the recommendation |
 
 The recommendation modal also states the suggested action. For **Remove**: delete the account; deleted users can be restored from **Deleted users** within 30 days. For **Review**: confirm with the sponsor or resource owner, or use an Access Review.
@@ -62,7 +62,7 @@ Reading `signInActivity` requires an **Entra ID P1 or P2** license and the `Audi
 |---------|--------|
 | Summary cards | Clickable cards for total guests, Remove, Review, Keep, pending invitations, never signed in, inactive, disabled, guests with directory roles, and guests without a sponsor, each filtering the table |
 | Search | Debounced real-time text search across name, UPN, mail, domain, company, sponsor, group, team, app and role names |
-| Filter panel | Multi-dimensional filter tags for recommendation, last sign-in bucket, invitation state, enabled state, creation date bucket, user type, identity provider, access type, sponsor and source |
+| Filter panel | Multi-dimensional filter tags for recommendation, last sign-in bucket, invitation state, enabled state, creation date bucket, user type, identity provider (including On-Prem Synced), access type and sponsor |
 | Column sort | Click any sortable column header to sort ascending; click again to reverse |
 | Export CSV | Downloads the currently visible (filtered) rows as a `.csv` file, UTF-8 with BOM for correct Excel rendering. The export includes extra columns not shown in the table: object ID, UPN, mail, company, days since last sign-in, group/team/app/role/sponsor names and the recommendation reasons |
 | Dark / light mode | Toggle persisted to `localStorage`; a GitHub repo link icon sits next to the toggle in the header |
@@ -81,7 +81,7 @@ Badges that only act as filters (User Type, Identity, Invitation, Enabled, New, 
 | Access | Apps: N | Applications assigned directly to the guest, with the assigned role and assignment date |
 | Access | Roles: N | Directory roles with assignment path (Direct or via group) and scope; each role links to the Microsoft Learn built-in roles reference |
 | Sponsors | N sponsor(s) | Sponsor name, UPN/mail and type (user or group) |
-| Recommendation | Remove / Review / Keep / On-Prem | Suggested action, every reason that contributed, and the thresholds used |
+| Recommendation | Remove / Review / Keep | Suggested action, every reason that contributed, and the thresholds used |
 | Guest | New | Plain filter badge for guests created in the last 30 days |
 
 ## Prerequisites
