@@ -2,6 +2,14 @@
 
 Generates an interactive, self-contained HTML cleanup report for every guest user (and external B2B member) in a Microsoft Entra ID tenant. Each account gets a **Remove / Review / Keep** recommendation with the reasons behind it. The report is designed for guest lifecycle reviews and access governance, and can run as a weekly automated report in Azure DevOps.
 
+## Live demo
+
+Try the report in your browser with fictional sample data (filters, sorting, detail modals and dark mode all work):
+
+[![Entra ID Guest Report preview](docs/images/report-preview.png)](https://matejklemencic.github.io/EntraID-GuestReport/demo/)
+
+**[▶ Open the live demo](https://matejklemencic.github.io/EntraID-GuestReport/demo/)**
+
 ## What it does
 
 The script connects to Microsoft Graph, retrieves every guest account in the tenant and analyzes each one across several dimensions:
@@ -310,6 +318,8 @@ Version v26.10.26 is a rewrite. Breaking changes:
 |------|---------|
 | `Get-EntraIDGuestReport.ps1` | Main script |
 | `azure-pipelines.yml` | Azure DevOps pipeline definition |
+| `docs/demo/index.html` | Sample report with fictional data, published as the live demo through GitHub Pages |
+| `docs/images/report-preview.png` | Screenshot used in the live demo section |
 
 ## Author
 
