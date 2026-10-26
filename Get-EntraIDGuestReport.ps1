@@ -630,8 +630,8 @@ if ($TargetUser) {
 } else {
     $rawUsers = @(Invoke-UserQuery {
         param([string]$Select)
-        # signInActivity limits the page size, so $top is only raised when it is not requested
-        $top = if ($Select -like '*signInActivity*') { '' } else { '&$top=999' }
+        # Graph caps the page size at 500 when signInActivity is selected (999 otherwise)
+        $top = if ($Select -like '*signInActivity*') { '&$top=500' } else { '&$top=999' }
         Get-GraphCollection "v1.0/users?`$filter=$([uri]::EscapeDataString("userType eq 'Guest'"))&`$select=$Select$top"
     })
     Write-Host "Found $($rawUsers.Count) guest users" -ForegroundColor Green
@@ -705,7 +705,7 @@ if (-not $SkipAccessDetails -and $rawUsers.Count -gt 0) {
         # memberOf is cast to groups (documented way to $select group properties; directory roles and administrative
         # units are not wanted here). Casts, $count and the complete appRoleAssignments result need ConsistencyLevel: eventual.
         $accessRequests.Add(@{ id = "m_$($u.id)"; url = "/users/$($u.id)/memberOf/microsoft.graph.group?`$count=true&`$select=id,displayName,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,resourceProvisioningOptions,visibility&`$top=999"; headers = $eventualHeaders })
-        $accessRequests.Add(@{ id = "a_$($u.id)"; url = "/users/$($u.id)/appRoleAssignments?`$count=true&`$select=id,appRoleId,resourceId,resourceDisplayName,createdDateTime"; headers = $eventualHeaders })
+        $accessRequests.Add(@{ id = "a_$($u.id)"; url = "/users/$($u.id)/appRoleAssignments?`$count=true&`$select=id,appRoleId,resourceId,resourceDisplayName,createdDateTime,principalId,principalType,principalDisplayName"; headers = $eventualHeaders })
         $accessRequests.Add(@{ id = "s_$($u.id)"; url = "/users/$($u.id)/sponsors?`$select=id,displayName,userPrincipalName,mail" })
     }
     $accessResults = Invoke-GraphBatch -Requests $accessRequests -Label 'access details'
@@ -807,11 +807,21 @@ foreach ($u in $rawUsers) {
             $roleName = if ([string]$item.appRoleId -eq '00000000-0000-0000-0000-000000000000') { 'Default Access' }
                         elseif ($resource -and $resource.Roles.ContainsKey([string]$item.appRoleId)) { $resource.Roles[[string]$item.appRoleId] }
                         else { [string]$item.appRoleId }
+            # Assignment made to the guest itself, or to a group the guest is a direct member of
+            $principalId = [string]$item.principalId
+            $viaGroup = ([string]$item.principalType -eq 'Group') -or ($principalId -and $principalId -ne [string]$u.id)
+            $via = 'Direct'
+            if ($viaGroup) {
+                $groupName = [string]$item.principalDisplayName
+                if (-not $groupName) { $groupName = @(@($groups) + @($teams) | Where-Object { $_.Id -eq $principalId } | ForEach-Object { $_.Name })[0] }
+                $via = if ($groupName) { "Group: $groupName" } else { 'Group' }
+            }
             $apps.Add([PSCustomObject]@{
                 ResourceId = [string]$item.resourceId
                 AppId      = if ($resource) { $resource.AppId } else { '' }
                 Name       = [string]$item.resourceDisplayName
                 Role       = $roleName
+                Via        = $via
                 Assigned   = ConvertTo-UtcDateTime $item.createdDateTime
             })
         }
@@ -1746,10 +1756,10 @@ foreach ($g in $sortedReport) {
             $nameCell = if ($_.AppId) {
                 "<a href='https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$(ConvertTo-HtmlSafe $_.ResourceId)/appId/$(ConvertTo-HtmlSafe $_.AppId)' target='_blank' rel='noopener'>$appName</a>"
             } else { $appName }
-            New-ModalRowHtml @($nameCell, (ConvertTo-HtmlSafe $_.Role), (Format-ReportDate $_.Assigned))
+            New-ModalRowHtml @($nameCell, (ConvertTo-HtmlSafe $_.Role), (ConvertTo-HtmlSafe $_.Via), (Format-ReportDate $_.Assigned))
         }) -join ''
-        $appsHtml = (New-ModalTableHtml 'appsModalTable' @('Application', 'Role', 'Assigned') $rows) +
-            "<p class='modal-note'>App role assignments Microsoft Graph returns for this guest, including those granted to groups the guest is a direct member of. Nested groups are not included. The list does not show whether an assignment is direct or through a group.</p>"
+        $appsHtml = (New-ModalTableHtml 'appsModalTable' @('Application', 'Role', 'Via', 'Assigned') $rows) +
+            "<p class='modal-note'>App role assignments Microsoft Graph returns for this guest. <strong>Via</strong> shows whether the assignment was made to the guest (Direct) or to a group the guest is a direct member of. Nested groups are not included.</p>"
     }
 
     $rolesHtml = ''
@@ -1776,7 +1786,7 @@ foreach ($g in $sortedReport) {
     # Search text and CSV-only values
     $groupNames   = @($g.Groups | ForEach-Object { $_.Name }) -join ', '
     $teamNames    = @($g.Teams | ForEach-Object { $_.Name }) -join ', '
-    $appNames     = @($g.Apps | ForEach-Object { "$($_.Name) ($($_.Role))" }) -join ', '
+    $appNames     = @($g.Apps | ForEach-Object { if ($_.Via -eq 'Direct') { "$($_.Name) ($($_.Role))" } else { "$($_.Name) ($($_.Role), via $($_.Via.ToLower()))" } }) -join ', '
     $roleNames    = @($g.Roles | ForEach-Object { "$($_.Role) ($($_.Via))" }) -join ', '
     $sponsorNames = @($g.Sponsors | ForEach-Object { $_.Name }) -join ', '
     $reasonText   = @($g.Reasons | ForEach-Object { $_.Text }) -join ' | '

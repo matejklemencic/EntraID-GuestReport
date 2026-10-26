@@ -11,7 +11,7 @@ The script connects to Microsoft Graph, retrieves every guest account in the ten
 - **Access**:
   - **Groups**: direct memberships (nested groups are not followed), with group type (Microsoft 365, Security, Mail-enabled security, Distribution, dynamic) and a role-assignable flag
   - **Teams**: Microsoft 365 groups with a team provisioned, with visibility
-  - **Applications**: app role assignments Microsoft Graph returns for the guest, including those granted to groups the guest is a direct member of (nested groups are not included), with the role name resolved. The report does not show whether an assignment is direct or through a group
+  - **Applications**: app role assignments Microsoft Graph returns for the guest, including those granted to groups the guest is a direct member of (nested groups are not included), with the role name resolved and a **Via** column that shows whether the assignment is direct or comes from a group
   - **Directory roles**: Entra ID roles assigned directly to the guest, or through a role-assignable group the guest is a member of, including administrative-unit scope
 - **Sponsors**: the users or groups recorded as responsible for the guest
 - **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, other federated IdPs, not redeemed, or On-Prem Synced for accounts synchronized from on-premises AD (they never redeem an invitation)
@@ -78,7 +78,7 @@ Badges that only act as filters (User Type, Identity, Invitation, Enabled, New, 
 | Last Sign-In | (date) | Last successful sign-in, last interactive and non-interactive attempts, created date, invitation state and change date, identity provider, creation type, company, UPN, mail and object ID |
 | Access | Groups: N | Direct group memberships with type and role-assignable flag; each group links to the Entra portal |
 | Access | Teams: N | Teams the guest is a member of, with visibility |
-| Access | Apps: N | Applications with an app role assignment for the guest, with the assigned role and assignment date |
+| Access | Apps: N | Applications with an app role assignment for the guest, with the assigned role, **Via** (Direct, or the group the assignment was made to) and assignment date |
 | Access | Roles: N | Directory roles with assignment path (Direct or via group) and scope; each role links to the Microsoft Learn built-in roles reference |
 | Sponsors | N sponsor(s) | Sponsor name, UPN/mail and type (user or group) |
 | Recommendation | Remove / Review / Keep | Suggested action, every reason that contributed, and the thresholds used |
