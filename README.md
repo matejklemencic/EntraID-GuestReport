@@ -9,9 +9,9 @@ The script connects to Microsoft Graph, retrieves every guest account in the ten
 - **Invitation state**: accepted, pending (with the number of days since the invitation was sent), or no invitation state (cross-tenant sync, on-premises synced)
 - **Sign-in activity**: last successful sign-in, last interactive and non-interactive sign-in attempts, days since last activity. This needs an Entra ID P1/P2 license; see [Sign-in activity](#sign-in-activity).
 - **Access**:
-  - **Groups**: direct memberships, with group type (Microsoft 365, Security, Mail-enabled security, Distribution, dynamic) and a role-assignable flag
+  - **Groups**: direct memberships (nested groups are not followed), with group type (Microsoft 365, Security, Mail-enabled security, Distribution, dynamic) and a role-assignable flag
   - **Teams**: Microsoft 365 groups with a team provisioned, with visibility
-  - **Applications**: app role assignments Graph reports for the guest, with the role name resolved (the report does not distinguish direct from group-based assignment)
+  - **Applications**: app role assignments Microsoft Graph returns for the guest, including those granted to groups the guest is a direct member of (nested groups are not included), with the role name resolved. The report does not show whether an assignment is direct or through a group
   - **Directory roles**: Entra ID roles assigned directly to the guest, or through a role-assignable group the guest is a member of, including administrative-unit scope
 - **Sponsors**: the users or groups recorded as responsible for the guest
 - **Identity provider**: Entra ID, Microsoft Account, Email one-time passcode, Google, other federated IdPs, not redeemed, or On-Prem Synced for accounts synchronized from on-premises AD (they never redeem an invitation)
@@ -32,8 +32,8 @@ Guest accounts don't carry permissions the way applications do, so the report do
 | Invitation pending for less than that | Keep |
 | Created less than 30 days ago | Keep (grace period for new guests) |
 | Sign-in activity unavailable (no P1/P2 license) | Review |
-| Never signed in, `-InactiveDays` (default 90) or more after redeeming the invitation / being created | **Remove** |
-| Never signed in, less than that | Review |
+| No sign-in recorded, `-InactiveDays` (default 90) or more after redeeming the invitation / being created | **Remove** |
+| No sign-in recorded, less than that | Review |
 | No sign-in for `-RemoveAfterDays` (default 365) days or more | **Remove** |
 | No sign-in for `-InactiveDays` days or more | Review |
 | Signed in within `-InactiveDays` days | Keep |
@@ -42,13 +42,13 @@ Modifiers applied afterwards:
 
 | Signal | Effect |
 |--------|--------|
-| Account disabled and inactive / never signed in | Review → **Remove** |
+| Account disabled and inactive / no sign-in recorded | Review → **Remove** |
 | Account disabled but recently active or new | Keep → Review |
 | Holds one or more directory roles (directly or through a role-assignable group) | Keep → Review, and always listed as a reason |
 | Synchronized from on-premises Active Directory | No change to the recommendation. The suggested action says the change must be made in on-premises AD, because changes in Entra ID are overwritten by the next sync |
 | No sponsor, or no group/Teams/app/role access at all | Listed as information; doesn't change the recommendation |
 
-The recommendation modal also states the suggested action. For **Remove**: delete the account; deleted users can be restored from **Deleted users** within 30 days. For **Review**: confirm with the sponsor or resource owner, or use an Access Review.
+The 30-day grace period for new guests and the 30-day limit for unredeemed invitations are this report's own defaults, not Microsoft guidance. Microsoft describes 90 to 180 days as a reasonable window for inactive accounts, and the 90-day review threshold follows that. For **Remove**: delete the account; deleted users can be restored from **Deleted users** within 30 days. For **Review**: confirm with the sponsor or resource owner, or use an Access Review.
 
 ### Sign-in activity
 
@@ -60,7 +60,7 @@ Reading `signInActivity` requires an **Entra ID P1 or P2** license and the `Audi
 
 | Feature | Detail |
 |---------|--------|
-| Summary cards | Clickable cards for total guests, Remove, Review, Keep, pending invitations, never signed in, inactive, disabled, guests with directory roles, and guests without a sponsor, each filtering the table |
+| Summary cards | Clickable cards for total guests, Remove, Review, Keep, pending invitations, no sign-in recorded, inactive, disabled, guests with directory roles, and guests without a sponsor, each filtering the table |
 | Search | Debounced real-time text search across name, UPN, mail, domain, company, sponsor, group, team, app and role names |
 | Filter panel | Multi-dimensional filter tags for recommendation, last sign-in bucket, invitation state, enabled state, creation date bucket, user type, identity provider (including On-Prem Synced), access type and sponsor |
 | Column sort | Click any sortable column header to sort ascending; click again to reverse |
@@ -106,12 +106,12 @@ The identity used to run the script (user, service principal, or managed identit
 
 | Permission | Purpose |
 |------------|---------|
-| `User.Read.All` | Read guest and external member accounts |
+| `User.Read.All` | Read guest and external member accounts and their sponsors |
 | `AuditLog.Read.All` | Read sign-in activity (also requires an Entra ID P1/P2 license) |
-| `Directory.Read.All` | Read group memberships, app role assignments, sponsors and application roles |
+| `Directory.Read.All` | Read group memberships, app role assignments and application roles |
 | `RoleManagement.Read.Directory` | Read directory role assignments |
 
-For **interactive (user) runs**, these are requested as delegated scopes during sign-in. Reading sign-in activity with delegated permissions also requires the signed-in user to hold a role that can read sign-in reports, such as Reports Reader, Security Reader or Global Reader.
+For **interactive (user) runs**, these are requested as delegated scopes during sign-in. The signed-in user also needs a Microsoft Entra role for these calls, as listed in the Microsoft Graph documentation: Reports Reader (at least) for sign-in activity, and for the other calls a role such as Directory Readers (app role assignments, directory role assignments, sponsors), Global Reader or Guest Inviter (sponsors). Check the role requirements on each API page before using a least-privilege role.
 
 ## Parameters
 

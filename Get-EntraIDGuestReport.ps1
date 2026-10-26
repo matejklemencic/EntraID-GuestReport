@@ -214,11 +214,11 @@ function Get-HttpStatusCode {
 
 # GET a Graph collection and follow @odata.nextLink until every page is read
 function Get-GraphCollection {
-    param([string]$Uri)
+    param([string]$Uri, [hashtable]$Headers = @{})
     $items = [System.Collections.Generic.List[object]]::new()
     $next = $Uri
     while ($next) {
-        $page = Invoke-MgWithRetry { Invoke-MgGraphRequest -Method GET -Uri $next -ErrorAction Stop }
+        $page = Invoke-MgWithRetry { Invoke-MgGraphRequest -Method GET -Uri $next -Headers $Headers -ErrorAction Stop }
         foreach ($item in @($page.value)) { if ($null -ne $item) { $items.Add($item) } }
         $next = $page.'@odata.nextLink'
     }
@@ -253,7 +253,12 @@ function Invoke-GraphBatch {
         for ($i = 0; $i -lt $pending.Count; $i += 20) {
             $batchNumber++
             $chunk = @($pending[$i..([Math]::Min($i + 19, $pending.Count - 1))])
-            $body = @{ requests = @($chunk | ForEach-Object { @{ id = $_.id; method = 'GET'; url = $_.url } }) } | ConvertTo-Json -Depth 4 -Compress
+            # A request can carry its own headers (e.g. ConsistencyLevel: eventual, which Graph requires for OData casts and $count)
+            $body = @{ requests = @($chunk | ForEach-Object {
+                $entry = @{ id = $_.id; method = 'GET'; url = $_.url }
+                if ($_.headers) { $entry.headers = $_.headers }
+                $entry
+            }) } | ConvertTo-Json -Depth 5 -Compress
             $response = Invoke-MgWithRetry { Invoke-MgGraphRequest -Method POST -Uri 'v1.0/$batch' -Body $body -ContentType 'application/json' -ErrorAction Stop }
 
             foreach ($resp in @($response.responses)) {
@@ -288,7 +293,7 @@ function Invoke-GraphBatch {
 # Read every item of a collection returned in a batch response, following @odata.nextLink.
 # Ok is $false when the request failed (missing response or HTTP status >= 400).
 function Get-BatchItems {
-    param($Response)
+    param($Response, [hashtable]$Headers = @{})
     $items = [System.Collections.Generic.List[object]]::new()
     if (-not $Response -or [int]$Response.status -ge 400) {
         return @{ Ok = $false; Items = $items }
@@ -296,7 +301,7 @@ function Get-BatchItems {
     foreach ($item in @($Response.body.value)) { if ($null -ne $item) { $items.Add($item) } }
     $next = $Response.body.'@odata.nextLink'
     if ($next) {
-        foreach ($item in @(Get-GraphCollection $next)) { $items.Add($item) }
+        foreach ($item in @(Get-GraphCollection $next -Headers $Headers)) { $items.Add($item) }
     }
     return @{ Ok = $true; Items = $items }
 }
@@ -472,10 +477,10 @@ function Get-CleanupRecommendation {
         $sinceText = if ($Guest.Invitation -eq 'accepted') { "the invitation was redeemed $since days ago" } else { "the account was created $since days ago" }
         if ($null -eq $since -or $since -ge $InactiveDays) {
             $rec = 'remove'
-            $reasons.Add((New-Reason 'remove' "Never signed in, although $sinceText (threshold: $InactiveDays days)"))
+            $reasons.Add((New-Reason 'remove' "No sign-in recorded (never signed in, or last sign-in before April 2020), although $sinceText (threshold: $InactiveDays days)"))
         } else {
             $rec = 'review'
-            $reasons.Add((New-Reason 'review' "Never signed in since $sinceText"))
+            $reasons.Add((New-Reason 'review' "No sign-in recorded since $sinceText"))
         }
     }
     elseif ($Guest.DaysSinceActivity -ge $RemoveAfterDays) {
@@ -527,7 +532,7 @@ function Get-CleanupRecommendation {
     # Synced accounts are assessed like any other guest; only the place where the action has to
     # be taken differs (see $recAction in the report section).
     if ($Guest.OnPremisesSynced) {
-        $reasons.Add((New-Reason 'info' "Synchronized from on-premises Active Directory. Changes made in Entra ID are overwritten by the next sync, so act on the source directory"))
+        $reasons.Add((New-Reason 'info' "Synchronized from on-premises Active Directory. Entra ID is not the source of authority for this account, so act on the source directory"))
     }
 
     return @{ Recommendation = $rec; Reasons = $reasons }
@@ -695,9 +700,12 @@ $servicePrincipalsById = @{}
 if (-not $SkipAccessDetails -and $rawUsers.Count -gt 0) {
     Write-Host "Reading group, Teams, application and sponsor details..." -ForegroundColor Green
     $accessRequests = [System.Collections.Generic.List[hashtable]]::new()
+    $eventualHeaders = @{ ConsistencyLevel = 'eventual' }
     foreach ($u in $rawUsers) {
-        $accessRequests.Add(@{ id = "m_$($u.id)"; url = "/users/$($u.id)/memberOf?`$select=id,displayName,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,resourceProvisioningOptions,visibility&`$top=999" })
-        $accessRequests.Add(@{ id = "a_$($u.id)"; url = "/users/$($u.id)/appRoleAssignments?`$select=id,appRoleId,resourceId,resourceDisplayName,createdDateTime" })
+        # memberOf is cast to groups (documented way to $select group properties; directory roles and administrative
+        # units are not wanted here). Casts, $count and the complete appRoleAssignments result need ConsistencyLevel: eventual.
+        $accessRequests.Add(@{ id = "m_$($u.id)"; url = "/users/$($u.id)/memberOf/microsoft.graph.group?`$count=true&`$select=id,displayName,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,resourceProvisioningOptions,visibility&`$top=999"; headers = $eventualHeaders })
+        $accessRequests.Add(@{ id = "a_$($u.id)"; url = "/users/$($u.id)/appRoleAssignments?`$count=true&`$select=id,appRoleId,resourceId,resourceDisplayName,createdDateTime"; headers = $eventualHeaders })
         $accessRequests.Add(@{ id = "s_$($u.id)"; url = "/users/$($u.id)/sponsors?`$select=id,displayName,userPrincipalName,mail" })
     }
     $accessResults = Invoke-GraphBatch -Requests $accessRequests -Label 'access details'
@@ -773,8 +781,8 @@ foreach ($u in $rawUsers) {
     $accessCollected = -not $SkipAccessDetails
 
     if ($accessCollected) {
-        $membership = Get-BatchItems $accessResults["m_$($u.id)"]
-        $appAssignments = Get-BatchItems $accessResults["a_$($u.id)"]
+        $membership = Get-BatchItems $accessResults["m_$($u.id)"] -Headers $eventualHeaders
+        $appAssignments = Get-BatchItems $accessResults["a_$($u.id)"] -Headers $eventualHeaders
         $sponsorItems = Get-BatchItems $accessResults["s_$($u.id)"]
         if (-not ($membership.Ok -and $appAssignments.Ok -and $sponsorItems.Ok)) {
             $script:accessReadFailures++
@@ -782,7 +790,8 @@ foreach ($u in $rawUsers) {
         }
 
         foreach ($item in $membership.Items) {
-            if ($item['@odata.type'] -ne '#microsoft.graph.group') { continue }
+            # The request is cast to groups, so items normally carry no @odata.type; skip anything that explicitly isn't a group
+            if ($item['@odata.type'] -and $item['@odata.type'] -ne '#microsoft.graph.group') { continue }
             $entry = [PSCustomObject]@{
                 Id             = [string]$item.id
                 Name           = [string]$item.displayName
@@ -1440,7 +1449,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <div class="number">$pendingCount</div>
             <div class="subtitle">Invitation not redeemed yet</div>
         </div>
-        <div class="summary-card" data-fg="activity" data-fv="never" title="Redeemed or created, but never signed in. Click to filter.">
+        <div class="summary-card" data-fg="activity" data-fv="never" title="No sign-in recorded: the user never signed in, or last signed in before April 2020 (Entra ID does not return older data). Click to filter.">
             <h3>Never Signed In</h3>
             <div class="number">$neverSignedInCount</div>
             <div class="subtitle">No sign-in recorded</div>
@@ -1516,7 +1525,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <span class="filter-tag c-green"  data-group="activity" data-value="active"   onclick="toggleTag(this)">Active (&lt; $InactiveDays days) <span class="cnt"></span></span>
             <span class="filter-tag c-orange" data-group="activity" data-value="inactive" onclick="toggleTag(this)">Inactive ($InactiveDays+ days) <span class="cnt"></span></span>
             <span class="filter-tag c-red"    data-group="activity" data-value="stale"    onclick="toggleTag(this)">Stale ($RemoveAfterDays+ days) <span class="cnt"></span></span>
-            <span class="filter-tag c-orange" data-group="activity" data-value="never"    onclick="toggleTag(this)">Never <span class="cnt"></span></span>
+            <span class="filter-tag c-orange" data-group="activity" data-value="never"    title="No sign-in recorded: never signed in, or last sign-in before April 2020" onclick="toggleTag(this)">Never <span class="cnt"></span></span>
             $unknownActivityTag
         </div>
         <div class="filter-group">
@@ -1594,8 +1603,8 @@ $recAction     = @{
 }
 # Synced accounts: the action is the same, but it has to be performed in the source directory
 $recActionOnPrem = @{
-    remove = 'Delete this account in on-premises Active Directory (or remove it from the sync scope). Deleting it in Entra ID is overwritten by the next sync.'
-    review = 'Confirm with the sponsor or the owners of the resources this guest can access whether access is still needed. Any change must be made in on-premises Active Directory, because changes in Entra ID are overwritten by the next sync.'
+    remove = 'Delete this account in on-premises Active Directory (or remove it from the sync scope). If you delete it only in Entra ID, the next sync may restore it while it still exists on-premises.'
+    review = 'Confirm with the sponsor or the owners of the resources this guest can access whether access is still needed. Any change must be made in on-premises Active Directory, because Entra ID is not the source of authority for this account.'
     keep   = 'No action needed at this time.'
 }
 $reasonBadge = @{ remove = 'red'; review = 'amber'; keep = 'green'; info = 'gray' }
@@ -1624,7 +1633,7 @@ foreach ($g in $sortedReport) {
     $invitationText = switch ($g.Invitation) {
         'accepted' { "<span class='badge green clickable-badge' data-fg='invitation' data-fv='accepted' title='Invitation redeemed.'>Accepted</span>" }
         'pending'  { "<span class='badge amber clickable-badge' data-fg='invitation' data-fv='pending' title='Invitation sent but not redeemed yet.'>Pending</span><div class='muted' style='margin-top:4px'>$($g.PendingDays) days</div>" }
-        default    { "<span class='badge gray clickable-badge' data-fg='invitation' data-fv='none' title='No B2B invitation state, e.g. created by cross-tenant synchronization or synced from on-premises.'>N/A</span>" }
+        default    { "<span class='badge gray clickable-badge' data-fg='invitation' data-fv='none' title='No invitation state from the invitation API (for example, a synced account or an account created another way).'>N/A</span>" }
     }
 
     $enabledText = if ($g.AccountEnabled) { "<span class='badge green clickable-badge' data-fg='enabled' data-fv='yes' title='Sign-in allowed.'>Yes</span>" } else { "<span class='badge gray clickable-badge' data-fg='enabled' data-fv='no' title='Sign-in blocked.'>No</span>" }
@@ -1635,7 +1644,7 @@ foreach ($g in $sortedReport) {
     $activityInner = switch ($g.ActivityBucket) {
         'unknown' { "<span class='muted'>Unknown</span>" }
         'pending' { "<span class='muted'>Not redeemed</span>" }
-        'never'   { "<span class='activity-inactive'>Never</span>" }
+        'never'   { "<span class='activity-inactive' title='No sign-in recorded: never signed in, or last sign-in before April 2020. Click for details.'>Never</span>" }
         default {
             $cls = if ($g.ActivityBucket -eq 'stale') { 'activity-stale' } elseif ($g.ActivityBucket -eq 'inactive') { 'activity-inactive' } else { '' }
             $approxMark = if ($g.LastActivityIsApproximate) { '*' } else { '' }
@@ -1650,7 +1659,7 @@ foreach ($g in $sortedReport) {
     if ($g.AccessCollected) {
         if ($g.Groups.Count -gt 0) { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'groups')`" style='cursor:pointer' title='Direct group memberships. Click to view details.'>Groups: $($g.Groups.Count)</span>") }
         if ($g.Teams.Count -gt 0)  { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'teams')`" style='cursor:pointer' title='Microsoft Teams the guest is a member of. Click to view details.'>Teams: $($g.Teams.Count)</span>") }
-        if ($g.Apps.Count -gt 0)   { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'apps')`" style='cursor:pointer' title='Applications with an app role assignment for this guest, as reported by Microsoft Graph. Click to view details.'>Apps: $($g.Apps.Count)</span>") }
+        if ($g.Apps.Count -gt 0)   { $accessBadges.Add("<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'apps')`" style='cursor:pointer' title='Applications with an app role assignment for this guest, directly or through a group the guest is a direct member of. Click to view details.'>Apps: $($g.Apps.Count)</span>") }
     }
     if ($g.Roles.Count -gt 0) { $accessBadges.Add("<span class='badge purple' onclick=`"$(Get-ModalOnClick $key 'roles')`" style='cursor:pointer' title='Entra ID directory roles, assigned directly or through a role-assignable group. Click to view details.'>Roles: $($g.Roles.Count)</span>") }
     if (-not $g.AccessCollected) {
@@ -1715,7 +1724,7 @@ foreach ($g in $sortedReport) {
             New-ModalRowHtml @($link, (ConvertTo-HtmlSafe $_.Type), $flag)
         }) -join ''
         $groupsHtml = (New-ModalTableHtml 'groupsModalTable' @('Group', 'Type', 'Notes') $rows) +
-            "<p class='modal-note'>Direct memberships only. Memberships of dynamic groups are removed automatically when the guest is deleted or no longer matches the rule.</p>"
+            "<p class='modal-note'>Direct memberships only. Access through nested groups is not shown. Dynamic group membership is controlled by the group rule and cannot be changed manually.</p>"
     }
 
     $teamsHtml = ''
@@ -1740,7 +1749,7 @@ foreach ($g in $sortedReport) {
             New-ModalRowHtml @($nameCell, (ConvertTo-HtmlSafe $_.Role), (Format-ReportDate $_.Assigned))
         }) -join ''
         $appsHtml = (New-ModalTableHtml 'appsModalTable' @('Application', 'Role', 'Assigned') $rows) +
-            "<p class='modal-note'>App role assignments as reported by Microsoft Graph for this guest. The list does not show whether an assignment was made directly or through a group.</p>"
+            "<p class='modal-note'>App role assignments Microsoft Graph returns for this guest, including those granted to groups the guest is a direct member of. Nested groups are not included. The list does not show whether an assignment is direct or through a group.</p>"
     }
 
     $rolesHtml = ''
