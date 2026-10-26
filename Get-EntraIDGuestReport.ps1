@@ -135,6 +135,11 @@ if ($NonInteractive) { $ProgressPreference = 'SilentlyContinue' }
 # Script version - keep in sync with the .NOTES header above; surfaced in the report footer
 $ScriptVersion = 'v26.10.26'
 
+# Column header of the "Export for deletion" file. It must match the CSV template of Entra admin center >
+# Users > Bulk operations > Bulk delete exactly. Microsoft Learn: "preserve the column header exactly as downloaded";
+# if Microsoft changes the template, change this text (the portal validates the file before anything is deleted).
+$deletionCsvHeader = 'UserPrincipalName or Object ID [UPN or objectId] Required'
+
 # Guests created within this many days are never recommended for removal (still settling in)
 $NewGuestDays = 30
 
@@ -1217,6 +1222,7 @@ $sb = [System.Text.StringBuilder]::new()
             transition: background 0.15s, border-color 0.15s;
         }
         .export-csv-btn:hover { border-color: var(--blue); background: var(--blue-xs); }
+        .export-csv-btn + .export-csv-btn { margin-left: 0; }
         .filter-summary { font-size: 13px; font-weight: 600; color: var(--text); }
 
         .clickable-badge { cursor: pointer; transition: filter 0.15s, box-shadow 0.15s; }
@@ -1525,6 +1531,7 @@ $unknownActivityTag = if (-not $script:signInDataAvailable) {
             <span class="caret">&#9656;</span> Search &amp; Filter
         </button>
         <span id="filterSummary" class="filter-summary"></span>
+        <button class="export-csv-btn" onclick="exportDeletionList()" title="Download the Object IDs of the visible guests in the format of Entra admin center Bulk delete (on-premises synced guests and guests with directory roles are left out)">&#8595; Export for deletion</button>
         <button class="export-csv-btn" onclick="exportCsv()" title="Download visible rows as CSV">&#8595; Export CSV</button>
     </div>
 
@@ -1834,10 +1841,11 @@ foreach ($g in $sortedReport) {
     $rowClass = "rec-$($g.Recommendation)"
     $sourceText = if ($g.OnPremisesSynced) { 'On-Premises' } else { 'Cloud' }
     $collectedValue = if ($g.AccessCollected) { 'yes' } else { 'no' }
+    $privilegedValue = if ($g.Roles.Count -gt 0 -or @(@($g.Groups) + @($g.Teams) | Where-Object { $_.RoleAssignable }).Count -gt 0) { 'yes' } else { 'no' }
     $enabledValue = if ($g.AccountEnabled) { 'yes' } else { 'no' }
 
     [void]$sb.Append(@"
-            <tr class="$rowClass" data-search="$searchText" data-rec="$($g.Recommendation)" data-usertype="$($g.UserType)" data-invitation="$($g.Invitation)" data-enabled="$enabledValue" data-createdbucket="$($g.CreatedBucket)" data-activity="$($g.ActivityBucket)" data-identity="$($g.IdentityKey)" data-groupcount="$($g.Groups.Count)" data-teamcount="$($g.Teams.Count)" data-appcount="$($g.Apps.Count)" data-rolecount="$($g.Roles.Count)" data-collected="$collectedValue" data-sponsor="$sponsorValue">
+            <tr class="$rowClass" data-search="$searchText" data-rec="$($g.Recommendation)" data-usertype="$($g.UserType)" data-invitation="$($g.Invitation)" data-enabled="$enabledValue" data-createdbucket="$($g.CreatedBucket)" data-activity="$($g.ActivityBucket)" data-identity="$($g.IdentityKey)" data-groupcount="$($g.Groups.Count)" data-teamcount="$($g.Teams.Count)" data-appcount="$($g.Apps.Count)" data-rolecount="$($g.Roles.Count)" data-collected="$collectedValue" data-sponsor="$sponsorValue" data-privileged="$privilegedValue">
                 <td data-sort="$($safeName.ToLower())">$newBadge<a class="guest-name" href="$portalUrl" target="_blank" title="Open in Entra portal">$safeName</a><div class="muted" style="margin-top:4px">$(ConvertTo-HtmlSafe $contact)</div></td>
                 <td class="cell-sm">$(Format-ReportDate $g.Created)</td>
                 <td class="cell-sm">$enabledText</td>
@@ -1865,7 +1873,7 @@ foreach ($g in $sortedReport) {
 "@)
 }
 
-$reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`n") + "`n};"
+$reportDetailsBlock = "const deletionCsvHeader = $(ConvertTo-JsString $deletionCsvHeader);`n" + "const reportDetails = {`n" + ($modalDataEntries -join ",`n") + "`n};"
 
 [void]$sb.Append(@"
         </tbody>
@@ -2109,15 +2117,54 @@ $reportDetailsBlock = "const reportDetails = {`n" + ($modalDataEntries -join ",`
             });
 
             // UTF-8 BOM ensures Excel opens the file with correct encoding
-            const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+            downloadFile('\uFEFF' + lines.join('\r\n'), 'EntraIDGuestReport_' + new Date().toISOString().slice(0, 10) + '.csv');
+        }
+
+        function downloadFile(content, fileName) {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
             const url  = URL.createObjectURL(blob);
             const a    = document.createElement('a');
             a.href     = url;
-            a.download = 'EntraIDGuestReport_' + new Date().toISOString().slice(0, 10) + '.csv';
+            a.download = fileName;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        // One-column file in the format of Entra admin center > Users > Bulk operations > Bulk delete.
+        // The report never deletes anything; it only produces this file for the visible (filtered) guests.
+        function exportDeletionList() {
+            const headers = Array.from(document.querySelectorAll('#reportTable thead th'))
+                .map(th => th.textContent.replace(/[\u25B2\u25BC]/g, '').trim());
+            const idCol = headers.indexOf('Object ID');
+            if (idCol < 0) { alert('The Object ID column was not found in this report.'); return; }
+
+            const rows = Array.from(document.querySelectorAll('#reportTable tbody tr'))
+                .filter(tr => tr.style.display !== 'none');
+            if (rows.length === 0) { alert('No guests are visible. Adjust the filters first.'); return; }
+
+            let filtersActive = document.getElementById('searchInput').value.trim() !== '';
+            for (const g in activeFilters) { if (activeFilters[g].size > 0) filtersActive = true; }
+            if (!filtersActive && !confirm('No filter is active. This would export ALL ' + rows.length + ' guests for deletion.\n\nContinue?')) return;
+
+            // On-premises synced guests have to be deleted in on-premises AD (a delete in Entra ID can be undone by the next sync).
+            // Guests with directory roles, or in a role-assignable group, need a higher-privileged administrator than User Administrator.
+            const synced = rows.filter(r => r.dataset.identity === 'onprem');
+            const privileged = rows.filter(r => r.dataset.identity !== 'onprem' && r.dataset.privileged === 'yes');
+            const include = rows.filter(r => r.dataset.identity !== 'onprem' && r.dataset.privileged !== 'yes');
+
+            const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            const ids = include.map(r => r.cells[idCol].textContent.trim()).filter(id => guidPattern.test(id));
+
+            let message = 'Export ' + ids.length + ' guest(s) for deletion?';
+            if (synced.length > 0) message += '\n\nLeft out: ' + synced.length + ' on-premises synced guest(s). Delete these in on-premises Active Directory.';
+            if (privileged.length > 0) message += '\n\nLeft out: ' + privileged.length + ' guest(s) with directory roles or role-assignable group membership. Deleting them requires Privileged Authentication Administrator or Global Administrator.';
+            if (ids.length === 0) { alert('Nothing to export.' + message.substring(message.indexOf('\n'))); return; }
+            if (!confirm(message)) return;
+
+            // No BOM: the portal compares the header text exactly
+            downloadFile([deletionCsvHeader].concat(ids).join('\r\n') + '\r\n', 'EntraIDGuestDeletionList_' + new Date().toISOString().slice(0, 10) + '.csv');
         }
 
         let _modalTrigger = null;

@@ -65,6 +65,7 @@ Reading `signInActivity` requires an **Entra ID P1 or P2** license and the `Audi
 | Filter panel | Multi-dimensional filter tags for recommendation, last sign-in bucket, invitation state, enabled state, creation date bucket, user type, identity provider (including On-Prem Synced), access type and sponsor |
 | Column sort | Click any sortable column header to sort ascending; click again to reverse |
 | Export CSV | Downloads the currently visible (filtered) rows as a `.csv` file, UTF-8 with BOM for correct Excel rendering. The export includes extra columns not shown in the table: object ID, UPN, mail, company, days since last sign-in, group/team/app/role/sponsor names and the recommendation reasons |
+| Export for deletion | Downloads the Object IDs of the visible (filtered) guests as a one-column file in the format of Entra admin center **Bulk delete**. On-premises synced guests and guests with directory roles or role-assignable group membership are left out, with a message. See [Bulk delete](#bulk-delete) |
 | Dark / light mode | Toggle persisted to `localStorage`; a GitHub repo link icon sits next to the toggle in the header |
 | Portal deep links | Guest names link to the user in the Entra portal; groups, Teams and apps in the modals link to their portal pages |
 | Detail modals | Clickable badges open a detail panel; see [Interactive badges](#interactive-badges) |
@@ -189,6 +190,42 @@ A browser window opens for Microsoft sign-in. The report is saved to the current
 
 Group, application and sponsor details are read through Microsoft Graph JSON batching (20 requests per call, three requests per guest). On tenants with tens of thousands of guests, use `-SkipAccessDetails` for a faster run that still covers activity, invitation state and direct directory roles.
 
+## Bulk delete
+
+The report never deletes anything. It prepares the list, and you delete with the tool built into Entra.
+
+1. In the report, filter to the guests you want to remove (for example **Recommendation = Remove**), and review the list.
+2. Click **Export for deletion**. The file `EntraIDGuestDeletionList_YYYY-MM-DD.csv` contains only the Object IDs of the visible guests, under the header Entra expects:
+   ```
+   UserPrincipalName or Object ID [UPN or objectId] Required
+   ```
+3. In the Microsoft Entra admin center go to **Users > All users > Bulk operations > Bulk delete** (User Administrator or higher), upload the file and wait for the validation before you submit.
+
+What the button does for safety:
+
+- If no filter is active, it warns that **all** guests would be exported.
+- **On-premises synced guests are left out.** Delete them in on-premises Active Directory; if you delete only the Entra ID object and the account still exists on-premises, the sync may restore it.
+- **Guests with active or eligible directory roles, or in a role-assignable group, are left out.** Deleting them takes Privileged Authentication Administrator or Global Administrator, so handle them deliberately.
+- The dialog tells you how many guests are exported and how many were left out.
+
+Good to know (Microsoft Learn):
+
+- The file has to match the portal's CSV template. If Microsoft changes the header, download the template from the **Bulk delete** page, compare the header, and update `$deletionCsvHeader` at the top of the script. The portal validates the file before anything is deleted, so a mismatch is caught early.
+- Failed rows are listed in the results file on the **Bulk operation results** page.
+- Large files may not finish within the hour. Split them into smaller batches.
+- Deleted users can be restored from **Deleted users** for 30 days.
+
+### Alternative: PowerShell
+
+The same file works with PowerShell. Preview first with `-WhatIf`; remove it to delete.
+
+```powershell
+$column = 'UserPrincipalName or Object ID [UPN or objectId] Required'
+Connect-MgGraph -Scopes User.DeleteRestore.All
+Import-Csv .\EntraIDGuestDeletionList_YYYY-MM-DD.csv | ForEach-Object { Remove-MgUser -UserId $_.$column -WhatIf }
+```
+
+Microsoft Learn names `User.DeleteRestore.All` as the least-privileged permission on the `Remove-MgUser` page, but the Graph API page lists `User.ReadWrite.All`. If the first is rejected in your tenant, use the second.
 ## Azure DevOps pipeline
 
 The included `azure-pipelines.yml` automates weekly report generation using a federated Azure service connection. No secrets or passwords are stored in ADO.
