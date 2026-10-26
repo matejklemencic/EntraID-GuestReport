@@ -78,7 +78,7 @@ steps:
         # Run the report
         $outputPath = "$(Build.ArtifactStagingDirectory)/EntraIDGuestReport_$(Get-Date -Format 'yyyy-MM-dd').html"
 
-        & "$(Build.SourcesDirectory)/Export-EntraGuestReport.ps1" `
+        & "$(Build.SourcesDirectory)/Get-EntraIDGuestReport.ps1" `
           -AccessToken $graphToken `
           -NonInteractive `
           -OutputPath $outputPath

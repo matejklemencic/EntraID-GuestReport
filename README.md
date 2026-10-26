@@ -137,7 +137,7 @@ For **interactive (user) runs**, these are requested as delegated scopes during 
 ### Interactive sign-in (default tenant)
 
 ```powershell
-.\Export-EntraGuestReport.ps1
+.\Get-EntraIDGuestReport.ps1
 ```
 
 A browser window opens for Microsoft sign-in. The report is saved to the current directory and opened automatically when complete.
@@ -145,13 +145,13 @@ A browser window opens for Microsoft sign-in. The report is saved to the current
 ### Interactive sign-in for a specific tenant
 
 ```powershell
-.\Export-EntraGuestReport.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+.\Get-EntraIDGuestReport.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
 ### Service Principal with certificate
 
 ```powershell
-.\Export-EntraGuestReport.ps1 `
+.\Get-EntraIDGuestReport.ps1 `
     -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
     -ClientId "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" `
     -CertificateThumbprint "ABCDEF1234567890ABCDEF1234567890ABCDEF12" `
@@ -163,23 +163,23 @@ A browser window opens for Microsoft sign-in. The report is saved to the current
 
 ```powershell
 # System-assigned Managed Identity
-.\Export-EntraGuestReport.ps1 -UseManagedIdentity -NonInteractive -OutputPath ".\report.html"
+.\Get-EntraIDGuestReport.ps1 -UseManagedIdentity -NonInteractive -OutputPath ".\report.html"
 
 # User-assigned Managed Identity (select by its client ID)
-.\Export-EntraGuestReport.ps1 -UseManagedIdentity -ClientId "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" -NonInteractive -OutputPath ".\report.html"
+.\Get-EntraIDGuestReport.ps1 -UseManagedIdentity -ClientId "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" -NonInteractive -OutputPath ".\report.html"
 ```
 
 ### Custom thresholds
 
 ```powershell
 # Review after 60 days without sign-in, remove after 180 days, expire invitations after 14 days
-.\Export-EntraGuestReport.ps1 -InactiveDays 60 -RemoveAfterDays 180 -PendingInvitationDays 14
+.\Get-EntraIDGuestReport.ps1 -InactiveDays 60 -RemoveAfterDays 180 -PendingInvitationDays 14
 ```
 
 ### Analyze a single guest
 
 ```powershell
-.\Export-EntraGuestReport.ps1 -TargetUser "john_contoso.com#EXT#@fabrikam.onmicrosoft.com"
+.\Get-EntraIDGuestReport.ps1 -TargetUser "john_contoso.com#EXT#@fabrikam.onmicrosoft.com"
 ```
 
 ### Large tenants
@@ -268,7 +268,7 @@ Version v26.10.26 is a rewrite. Breaking changes:
 
 | File | Purpose |
 |------|---------|
-| `Export-EntraGuestReport.ps1` | Main script |
+| `Get-EntraIDGuestReport.ps1` | Main script |
 | `azure-pipelines.yml` | Azure DevOps pipeline definition |
 
 ## Author

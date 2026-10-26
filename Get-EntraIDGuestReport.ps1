@@ -59,26 +59,26 @@
     Useful for testing parameter validation and authentication without side effects.
 .EXAMPLE
     # Interactive: generate a report for the default tenant
-    .\Export-EntraGuestReport.ps1
+    .\Get-EntraIDGuestReport.ps1
 .EXAMPLE
     # Interactive: generate a report for a specific tenant
-    .\Export-EntraGuestReport.ps1 -TenantId "your-tenant-id"
+    .\Get-EntraIDGuestReport.ps1 -TenantId "your-tenant-id"
 .EXAMPLE
     # Azure DevOps with azureSubscription service connection (recommended for ADO)
     $token = (Get-AzAccessToken -ResourceTypeName MSGraph -AsSecureString).Token
-    .\Export-EntraGuestReport.ps1 -AccessToken $token -NonInteractive -OutputPath "report.html"
+    .\Get-EntraIDGuestReport.ps1 -AccessToken $token -NonInteractive -OutputPath "report.html"
 .EXAMPLE
     # Service Principal with certificate
-    .\Export-EntraGuestReport.ps1 -TenantId "tenant-id" -ClientId "app-id" -CertificateThumbprint "thumbprint" -NonInteractive
+    .\Get-EntraIDGuestReport.ps1 -TenantId "tenant-id" -ClientId "app-id" -CertificateThumbprint "thumbprint" -NonInteractive
 .EXAMPLE
     # Managed Identity (Azure-hosted automation)
-    .\Export-EntraGuestReport.ps1 -UseManagedIdentity -NonInteractive -OutputPath ".\report.html"
+    .\Get-EntraIDGuestReport.ps1 -UseManagedIdentity -NonInteractive -OutputPath ".\report.html"
 .EXAMPLE
     # Stricter thresholds: review after 60 days, remove after 180 days
-    .\Export-EntraGuestReport.ps1 -InactiveDays 60 -RemoveAfterDays 180
+    .\Get-EntraIDGuestReport.ps1 -InactiveDays 60 -RemoveAfterDays 180
 .EXAMPLE
     # Quickly analyze a single guest
-    .\Export-EntraGuestReport.ps1 -TargetUser "john_contoso.com#EXT#@fabrikam.onmicrosoft.com"
+    .\Get-EntraIDGuestReport.ps1 -TargetUser "john_contoso.com#EXT#@fabrikam.onmicrosoft.com"
     #>
 
 [CmdletBinding()]
