@@ -43,9 +43,10 @@
 .PARAMETER ExcludeExternalMembers
     Optional. Only report users with userType 'Guest'. By default, external B2B users with userType
     'Member' (e.g. from cross-tenant synchronization or invited as members) are included as well.
-.PARAMETER SkipAccessDetails
-    Optional. Skip collecting group, Teams, application and sponsor details. Directly assigned directory
-    roles are still reported. Use on very large tenants to shorten the run.
+.PARAMETER IncludeAccessDetails
+    Optional. Also collect group, Teams, application and sponsor details. By default these are skipped
+    to keep the run fast; directory roles (active and eligible) are always reported. Collection uses
+    three Graph requests per guest, so expect a much longer run on very large tenants.
 .PARAMETER InactiveDays
     Number of days without a sign-in after which a guest is considered inactive and marked for Review.
     Default is 90.
@@ -79,6 +80,9 @@
 .EXAMPLE
     # Quickly analyze a single guest
     .\Get-EntraIDGuestReport.ps1 -TargetUser "john_contoso.com#EXT#@fabrikam.onmicrosoft.com"
+.EXAMPLE
+    # Include group, Teams, application and sponsor details (slower on large tenants)
+    .\Get-EntraIDGuestReport.ps1 -IncludeAccessDetails
     #>
 
 [CmdletBinding()]
@@ -95,7 +99,7 @@ param(
     # Scope
     [string]$TargetUser = "",
     [switch]$ExcludeExternalMembers,
-    [switch]$SkipAccessDetails,
+    [switch]$IncludeAccessDetails,
     # Cleanup thresholds (days)
     [ValidateRange(1, 3650)]
     [int]$InactiveDays = 90,
@@ -105,6 +109,9 @@ param(
     [int]$PendingInvitationDays = 30,
     [switch]$DryRun
 )
+
+# Access details (groups, Teams, applications, sponsors) are opt-in; the rest of the script keys off this flag
+$SkipAccessDetails = -not $IncludeAccessDetails
 
 # Validate mutually exclusive / dependent parameters
 if ($RemoveAfterDays -le $InactiveDays) {
@@ -1442,7 +1449,7 @@ $signInBanner = if (-not $script:signInDataAvailable) {
     "<div class='info-banner page-banner'><strong>Sign-in activity unavailable.</strong> Reading sign-in activity requires an Entra ID P1/P2 license and the AuditLog.Read.All permission. Recommendations below are based on invitation state, account age and account status only, and guests that would otherwise be assessed on inactivity are marked for Review.</div>"
 } else { '' }
 $accessBanner = if ($SkipAccessDetails) {
-    "<div class='info-banner page-banner'><strong>Access details skipped.</strong> The report was generated with -SkipAccessDetails: group, Teams, application and sponsor details were not collected. Only directly assigned directory roles are shown.</div>"
+    "<div class='info-banner page-banner'><strong>Access details not collected.</strong> Group, Teams, application and sponsor details are skipped by default. Run the script with -IncludeAccessDetails to include them. Only directly assigned directory roles are shown.</div>"
 } else { '' }
 $eligibilityBanner = if (-not $script:eligibilityAvailable) {
     "<div class='info-banner page-banner'><strong>Eligible (PIM) roles not shown.</strong> Eligible role assignments could not be read (Privileged Identity Management may not be available in this tenant, or the account lacks access). Guests that are only <em>eligible</em> for a directory role are not flagged in this report.</div>"
@@ -1716,14 +1723,14 @@ foreach ($g in $sortedReport) {
     }
     if ($g.Roles.Count -gt 0) { $accessBadges.Add("<span class='badge purple' onclick=`"$(Get-ModalOnClick $key 'roles')`" style='cursor:pointer' title='Entra ID directory roles, active or eligible (PIM), held directly or through a role-assignable group. Click to view details.'>Roles: $($g.Roles.Count)$(if ($eligibleRoleCount -gt 0) { " ($eligibleRoleCount eligible)" })</span>") }
     if (-not $g.AccessCollected) {
-        $accessBadges.Add("<span class='badge gray' title='Not collected (-SkipAccessDetails).'>Not collected</span>")
+        $accessBadges.Add("<span class='badge gray' title='Group, Teams and application details were not collected. Re-run the script with -IncludeAccessDetails to get them.'>Not collected</span>")
     } elseif ($accessBadges.Count -eq 0) {
         $accessBadges.Add("<span class='badge gray' title='No direct group, Teams, application or directory role access found.'>None</span>")
     }
     $accessText = $accessBadges -join ' '
 
     $sponsorText = if (-not $g.AccessCollected) {
-        "<span class='badge gray' title='Not collected (-SkipAccessDetails).'>Not collected</span>"
+        "<span class='badge gray' title='Sponsor details were not collected. Re-run the script with -IncludeAccessDetails to get them.'>Not collected</span>"
     } elseif ($g.Sponsors.Count -gt 0) {
         "<span class='badge blue' onclick=`"$(Get-ModalOnClick $key 'sponsors')`" style='cursor:pointer' title='People or groups responsible for this guest. Click to view details.'>$($g.Sponsors.Count) sponsor(s)</span>"
     } else {
@@ -2286,6 +2293,8 @@ Write-Host "`nGovernance Analysis:" -ForegroundColor White
 Write-Host "  - Guests with directory roles (active or eligible): $privilegedCount" -ForegroundColor Red
 if (-not $SkipAccessDetails) {
     Write-Host "  - Guests without a sponsor: $noSponsorCount" -ForegroundColor DarkYellow
+} else {
+    Write-Host "  - Group, Teams, application and sponsor details not collected (use -IncludeAccessDetails)" -ForegroundColor Gray
 }
 
 # Azure DevOps integration - emit pipeline-native signals when running on an ADO agent

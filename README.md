@@ -138,7 +138,7 @@ Eligible role assignments come from the PIM role eligibility schedules and are r
 | `-NonInteractive` | Switch | None | Suppress all prompts and skip automatic browser launch. Required for unattended or pipeline runs. |
 | `-TargetUser` | String | None | Analyze a single guest or external member by object ID or user principal name. Skips tenant enumeration and the confirmation prompt. |
 | `-ExcludeExternalMembers` | Switch | None | Only report `userType = Guest` accounts; skip external members. |
-| `-SkipAccessDetails` | Switch | None | Skip group, Teams, application and sponsor collection. Directory roles (active and eligible) are still reported. Useful on very large tenants. |
+| `-IncludeAccessDetails` | Switch | Off | Also collect group, Teams, application and sponsor details. Skipped by default for speed; directory roles (active and eligible) are always reported. Without it, the Access and Sponsors columns show a "Not collected" badge. Slower on very large tenants. |
 | `-InactiveDays` | Int | `90` | Days without a sign-in after which a guest is marked for Review. |
 | `-RemoveAfterDays` | Int | `365` | Days without a sign-in after which a guest is marked for Remove. Must be greater than `-InactiveDays`. |
 | `-PendingInvitationDays` | Int | `30` | Days after which an unredeemed invitation is marked for Remove. |
@@ -196,7 +196,13 @@ A browser window opens for Microsoft sign-in. The report is saved to the current
 
 ### Large tenants
 
-Group, application and sponsor details are read through Microsoft Graph JSON batching (20 requests per call, three requests per guest). On tenants with tens of thousands of guests, use `-SkipAccessDetails` for a faster run that still covers activity, invitation state and direct directory roles.
+By default the script skips group, Teams, application and sponsor details, so a run only covers activity, invitation state and directory roles. Add `-IncludeAccessDetails` to collect the rest. Those details are read through Microsoft Graph JSON batching (20 requests per call, three requests per guest), so on tenants with tens of thousands of guests expect a much longer run.
+
+### Include group, Teams, application and sponsor details
+
+```powershell
+.\Get-EntraIDGuestReport.ps1 -IncludeAccessDetails
+```
 
 ## Bulk delete
 
@@ -247,7 +253,7 @@ The included `azure-pipelines.yml` automates weekly report generation using a fe
 5. The HTML report is saved to `$(Build.ArtifactStagingDirectory)` and published as a pipeline artifact named `EntraIDGuestReport`.
 6. The run gets a **markdown summary tab** with the recommendation and signal counts. If any guest holds or is eligible for an Entra ID directory role, the script logs a pipeline warning and the run completes as **SucceededWithIssues** (orange). These signals are emitted only when the script detects an ADO agent via `TF_BUILD`; local runs are unaffected.
 
-> **Token lifetime:** the Graph token obtained via the service connection is valid for roughly an hour and can't be refreshed mid-run. Directory role assignments are pre-fetched in bulk and per-guest details use JSON batching to stay well within that window. On very large tenants, add `-SkipAccessDetails` to the script call in the pipeline.
+> **Token lifetime:** the Graph token obtained via the service connection is valid for roughly an hour and can't be refreshed mid-run. Directory role assignments are pre-fetched in bulk and per-guest details use JSON batching to stay well within that window. Access details (groups, Teams, applications, sponsors) are off by default; on very large tenants, think twice before adding `-IncludeAccessDetails` to the script call in the pipeline.
 
 > **Personal data:** the report contains names and email addresses of external users. Set an artifact retention period that matches your data protection requirements.
 
