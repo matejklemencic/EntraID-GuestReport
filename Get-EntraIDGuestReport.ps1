@@ -16,37 +16,17 @@
     Install-Module -Name Microsoft.Graph.Authentication -MinimumVersion '2.0.0' -Scope CurrentUser -AllowClobber
 .OUTPUTS
     None. Writes an HTML report to the file specified by -OutputPath.
-.PARAMETER OutputPath
-    Path to save the generated HTML report. Defaults to "EntraIDGuestReport__{TenantName}_{Date}.html".
-.PARAMETER TenantId
-    Optional. The Entra ID tenant ID to connect to. Required when using Service Principal authentication.
-.PARAMETER AccessToken
-    Optional. A pre-acquired Microsoft Graph access token (SecureString). Use this when the pipeline
-    already has an authenticated Az context (e.g. AzurePowerShell@5 with azureSubscription).
-    Obtain with: (Get-AzAccessToken -ResourceTypeName MSGraph -AsSecureString).Token
-.PARAMETER ClientId
-    Optional. The Application (client) ID of a Service Principal for unattended/pipeline authentication.
-    Must be combined with -CertificateThumbprint and -TenantId. Alternatively, combine with
-    -UseManagedIdentity to select a user-assigned Managed Identity by its client ID.
-.PARAMETER CertificateThumbprint
-    Optional. Certificate thumbprint for Service Principal authentication. Use with -ClientId and -TenantId.
-.PARAMETER UseManagedIdentity
-    Optional. Use the Azure Managed Identity of the hosting environment (e.g. Azure VM, Azure Function,
-    Azure Automation). No credentials required. Uses the system-assigned identity by default;
-    combine with -ClientId to select a user-assigned Managed Identity.
-.PARAMETER NonInteractive
-    Optional. Suppress all interactive prompts. Required for unattended/pipeline runs.
-    Also suppresses automatic browser launch after report generation.
-.PARAMETER TargetUser
-    Optional. Analyze a single guest or external member instead of the whole tenant. Accepts the
-    object ID or the user principal name. Skips the tenant enumeration and the confirmation prompt.
-.PARAMETER ExcludeExternalMembers
-    Optional. Only report users with userType 'Guest'. By default, external B2B users with userType
-    'Member' (e.g. from cross-tenant synchronization or invited as members) are included as well.
 .PARAMETER IncludeAccessDetails
     Optional. Also collect group, Teams, application and sponsor details. By default these are skipped
     to keep the run fast; directory roles (active and eligible) are always reported. Collection uses
     three Graph requests per guest, so expect a much longer run on very large tenants.
+.PARAMETER TenantId
+    Optional. The Entra ID tenant ID to connect to. Required when using Service Principal authentication.
+.PARAMETER OutputPath
+    Path to save the generated HTML report. Defaults to "EntraIDGuestReport__{TenantName}_{Date}.html".
+.PARAMETER TargetUser
+    Optional. Analyze a single guest or external member instead of the whole tenant. Accepts the
+    object ID or the user principal name. Skips the tenant enumeration and the confirmation prompt.
 .PARAMETER InactiveDays
     Number of days without a sign-in after which a guest is considered inactive and marked for Review.
     Default is 90.
@@ -55,9 +35,29 @@
     -InactiveDays. Default is 365.
 .PARAMETER PendingInvitationDays
     Number of days after which an unredeemed invitation is marked for Remove. Default is 30.
+.PARAMETER ExcludeExternalMembers
+    Optional. Only report users with userType 'Guest'. By default, external B2B users with userType
+    'Member' (e.g. from cross-tenant synchronization or invited as members) are included as well.
 .PARAMETER DryRun
     Optional. When set, skips writing the HTML report to disk and skips launching the browser.
     Useful for testing parameter validation and authentication without side effects.
+.PARAMETER NonInteractive
+    Optional. Suppress all interactive prompts. Required for unattended/pipeline runs.
+    Also suppresses automatic browser launch after report generation.
+.PARAMETER UseManagedIdentity
+    Optional. Use the Azure Managed Identity of the hosting environment (e.g. Azure VM, Azure Function,
+    Azure Automation). No credentials required. Uses the system-assigned identity by default;
+    combine with -ClientId to select a user-assigned Managed Identity.
+.PARAMETER ClientId
+    Optional. The Application (client) ID of a Service Principal for unattended/pipeline authentication.
+    Must be combined with -CertificateThumbprint and -TenantId. Alternatively, combine with
+    -UseManagedIdentity to select a user-assigned Managed Identity by its client ID.
+.PARAMETER CertificateThumbprint
+    Optional. Certificate thumbprint for Service Principal authentication. Use with -ClientId and -TenantId.
+.PARAMETER AccessToken
+    Optional. A pre-acquired Microsoft Graph access token (SecureString). Use this when the pipeline
+    already has an authenticated Az context (e.g. AzurePowerShell@5 with azureSubscription).
+    Obtain with: (Get-AzAccessToken -ResourceTypeName MSGraph -AsSecureString).Token
 .EXAMPLE
     # Interactive: generate a report for the default tenant
     .\Get-EntraIDGuestReport.ps1
@@ -85,21 +85,13 @@
     .\Get-EntraIDGuestReport.ps1 -IncludeAccessDetails
     #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$OutputPath = "",
+    [switch]$IncludeAccessDetails,
     [string]$TenantId = "",
-    # Pre-acquired token (e.g. from Get-AzAccessToken in AzurePowerShell@5 task)
-    [System.Security.SecureString]$AccessToken,
-    # Service Principal / pipeline authentication
-    [string]$ClientId = "",
-    [string]$CertificateThumbprint = "",
-    [switch]$UseManagedIdentity,
-    [switch]$NonInteractive,
+    [string]$OutputPath = "",
     # Scope
     [string]$TargetUser = "",
-    [switch]$ExcludeExternalMembers,
-    [switch]$IncludeAccessDetails,
     # Cleanup thresholds (days)
     [ValidateRange(1, 3650)]
     [int]$InactiveDays = 90,
@@ -107,7 +99,15 @@ param(
     [int]$RemoveAfterDays = 365,
     [ValidateRange(1, 3650)]
     [int]$PendingInvitationDays = 30,
-    [switch]$DryRun
+    [switch]$ExcludeExternalMembers,
+    [switch]$DryRun,
+    # Unattended / pipeline authentication
+    [switch]$NonInteractive,
+    [switch]$UseManagedIdentity,
+    [string]$ClientId = "",
+    [string]$CertificateThumbprint = "",
+    # Pre-acquired token (e.g. from Get-AzAccessToken in AzurePowerShell@5 task)
+    [System.Security.SecureString]$AccessToken
 )
 
 # Access details (groups, Teams, applications, sponsors) are opt-in; the rest of the script keys off this flag

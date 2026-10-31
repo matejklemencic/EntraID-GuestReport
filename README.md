@@ -129,20 +129,20 @@ Eligible role assignments come from the PIM role eligibility schedules and are r
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `-OutputPath` | String | Auto-generated | Path for the HTML report. Defaults to `EntraIDGuestReport__{TenantName}_{Date}.html` in the current directory. |
-| `-TenantId` | String | None | Entra ID tenant ID. Required for Service Principal authentication. |
-| `-AccessToken` | SecureString | None | Pre-acquired Microsoft Graph token. Used in Azure DevOps pipelines via `Get-AzAccessToken`. |
-| `-ClientId` | String | None | App (client) ID for Service Principal authentication. Must be combined with `-CertificateThumbprint` and `-TenantId`, or with `-UseManagedIdentity` to select a user-assigned Managed Identity. |
-| `-CertificateThumbprint` | String | None | Certificate thumbprint for Service Principal authentication. Requires `-ClientId`. |
-| `-UseManagedIdentity` | Switch | None | Authenticate using the Managed Identity of the hosting environment. System-assigned by default; add `-ClientId` for a user-assigned identity. |
-| `-NonInteractive` | Switch | None | Suppress all prompts and skip automatic browser launch. Required for unattended or pipeline runs. |
-| `-TargetUser` | String | None | Analyze a single guest or external member by object ID or user principal name. Skips tenant enumeration and the confirmation prompt. |
-| `-ExcludeExternalMembers` | Switch | None | Only report `userType = Guest` accounts; skip external members. |
 | `-IncludeAccessDetails` | Switch | Off | Also collect group, Teams, application and sponsor details. Skipped by default for speed; directory roles (active and eligible) are always reported. Without it, the Access and Sponsors columns show a "Not collected" badge. Slower on very large tenants. |
+| `-TenantId` | String | None | Entra ID tenant ID. Required for Service Principal authentication. |
+| `-OutputPath` | String | Auto-generated | Path for the HTML report. Defaults to `EntraIDGuestReport__{TenantName}_{Date}.html` in the current directory. |
+| `-TargetUser` | String | None | Analyze a single guest or external member by object ID or user principal name. Skips tenant enumeration and the confirmation prompt. |
 | `-InactiveDays` | Int | `90` | Days without a sign-in after which a guest is marked for Review. |
 | `-RemoveAfterDays` | Int | `365` | Days without a sign-in after which a guest is marked for Remove. Must be greater than `-InactiveDays`. |
 | `-PendingInvitationDays` | Int | `30` | Days after which an unredeemed invitation is marked for Remove. |
+| `-ExcludeExternalMembers` | Switch | None | Only report `userType = Guest` accounts; skip external members. |
 | `-DryRun` | Switch | None | Run the full analysis but skip writing the report to disk and opening the browser. |
+| `-NonInteractive` | Switch | None | Suppress all prompts and skip automatic browser launch. Required for unattended or pipeline runs. |
+| `-UseManagedIdentity` | Switch | None | Authenticate using the Managed Identity of the hosting environment. System-assigned by default; add `-ClientId` for a user-assigned identity. |
+| `-ClientId` | String | None | App (client) ID for Service Principal authentication. Must be combined with `-CertificateThumbprint` and `-TenantId`, or with `-UseManagedIdentity` to select a user-assigned Managed Identity. |
+| `-CertificateThumbprint` | String | None | Certificate thumbprint for Service Principal authentication. Requires `-ClientId`. |
+| `-AccessToken` | SecureString | None | Pre-acquired Microsoft Graph token. Used in Azure DevOps pipelines via `Get-AzAccessToken`. |
 
 ## Manual usage
 
