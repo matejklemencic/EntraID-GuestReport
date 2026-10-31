@@ -308,16 +308,6 @@ EntraIDGuestReport_YYYY-MM-DD.html
 
 Download the artifact from the pipeline run and open the HTML file in any browser. No internet connection is required.
 
-## Upgrading from version 2.0
-
-Version v26.10.26 is a rewrite. Breaking changes:
-
-- **Module**: uses `Microsoft.Graph.Authentication` instead of `Microsoft.Entra`.
-- **Output**: a single interactive HTML report. The server-side CSV and `_Summary.txt` files are gone; use the **Export CSV** button in the report instead (it exports the filtered rows).
-- **Parameters removed**: `-CSVOnly`, `-HTMLOnly`, `-FileName`, `-ExportPath` (use `-OutputPath`) and `-PendingAcceptanceOnly` (use the Invitation filter in the report).
-- **Activity** is now based on the last *successful* sign-in, not the last sign-in attempt.
-- **External members** (`userType = Member`) are included by default; use `-ExcludeExternalMembers` for the previous behavior.
-
 ## File reference
 
 | File | Purpose |
