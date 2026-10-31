@@ -46,7 +46,7 @@ Guest accounts don't carry permissions the way applications do, so the report do
 | No sign-in for `-InactiveDays` days or more | Review |
 | Signed in within `-InactiveDays` days | Keep |
 
-Modifiers applied afterwards:
+After these rules, a few extra signals can adjust the result:
 
 | Signal | Effect |
 |--------|--------|
